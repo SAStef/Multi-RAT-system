@@ -1,10 +1,16 @@
 import socket as s
+import time
+import os
 sock = s.socket(s.AF_INET, s.SOCK_DGRAM)
 
 ip = "192.38.81.6"
 port = 6967
-message = "Hello World"
-sock.sendto(message.encode(), (ip, port))
+
+a = 0
+while a<8:
+    message = os.urandom(8)
+    sock.sendto(message.encode(), (ip, port))
+    a+=1
 
 
 
