@@ -1,5 +1,4 @@
 import socket as s
-import time
 import os
 sock = s.socket(s.AF_INET, s.SOCK_DGRAM)
 
