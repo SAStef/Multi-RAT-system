@@ -7,27 +7,10 @@ port = 6967
 
 a = 0
 while a<8:
-    message1 = (os.urandom(8))
-    sock.sendto(message1, (ip, port))
+    Payload = (os.urandom(8))
+    sock.sendto(b"A" + Payload, (ip, port))
+    sock.sendto(b"B" + Payload, (ip, port))
     a+=1
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
