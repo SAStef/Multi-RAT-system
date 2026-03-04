@@ -29,11 +29,11 @@ try:
         now_ns = time.time_ns()
         latency_ms = (now_ns - ts_ns) / 1_000_000
 
-            print(
-                f"addr={addr} path={path} seq={seq} "
-                f"session={session_id:#010x} "
-                f"latency={latency_ms:.2f}ms "
-                f"payload={payload.hex()}"
+        print(
+            f"addr={addr} path={path} seq={seq} "
+            f"session={session_id:#010x} "
+            f"latency={latency_ms:.2f}ms "
+            f"payload={payload.hex()}"
             )
 
 except KeyboardInterrupt:
