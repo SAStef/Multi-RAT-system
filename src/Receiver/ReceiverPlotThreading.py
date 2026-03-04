@@ -4,10 +4,11 @@ import time
 import select
 import threading
 import collections
+import binascii
 
 PORT1 = 6967
 PORT2 = 6968
-HDR_FMT = "!IIQB3x"
+HDR_FMT = "!IIQBHx"
 HDR_SIZE = struct.calcsize(HDR_FMT)  # 20 bytes
 
 sock1 = s.socket(s.AF_INET, s.SOCK_DGRAM)
@@ -101,6 +102,8 @@ def update_and_print(path, seq, latency_ms, payload_size, addr):
         f"lost={m['lost']} ({loss_pct:.1f}%)",
         flush=True,
     )
+def crc16(data: bytes) -> int:
+    return binascii.crc_hqx(data, 0xFFFF)
 
 try:
     while True:
@@ -112,8 +115,12 @@ try:
                 print(f"[{addr}] Packet too short ({len(data)} bytes), skipping", flush=True)
                 continue
 
-            seq, session_id, ts_ns, path = struct.unpack(HDR_FMT, data[:HDR_SIZE])
+            seq, session_id, ts_ns, path, cs = struct.unpack(HDR_FMT, data[:HDR_SIZE])
             payload = data[HDR_SIZE:]
+
+            if crc16(payload) != cs:
+                print(f"BAD CRC seq={seq} path={path} from={addr}")
+                continue
 
             now_ns = time.time_ns()
             latency_ms = (now_ns - ts_ns) / 1_000_000
