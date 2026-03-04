@@ -1,6 +1,7 @@
 import socket as s
 import struct
 import time
+import select
 
 PORT1 = 6967
 PORT2 = 6968
@@ -16,7 +17,7 @@ sock2.setblocking(False)
 
 print(f"Listening on UDP {PORT1} (path 1) and {PORT2} (path 2)...")
 
-import select
+
 
 while True:
     readable, _, _ = select.select([sock1, sock2], [], [])
