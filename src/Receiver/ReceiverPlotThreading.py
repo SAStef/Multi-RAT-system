@@ -2,6 +2,8 @@ import socket as s
 import struct
 import time
 import select
+import threading
+import collections
 
 PORT1 = 6967
 PORT2 = 6968
@@ -16,18 +18,44 @@ print(f"Listening on UDP {PORT1} (path 1) and {PORT2} (path 2)...\n")
 
 def new_path_metrics():
     return {
-        "received":     0,
-        "last_seq":     -1,
-        "lost":         0,
-        "last_latency": None,   
-        "bytes":        0,
-        "start_time":   None,   
+        "received":        0,
+        "last_seq":        -1,
+        "lost":            0,
+        "last_latency":    None,
+        "bytes":           0,
+        "start_time":      None,
+        "latency_hist":    collections.deque(maxlen=200),
+        "jitter_hist":     collections.deque(maxlen=200),
+        "throughput_hist": collections.deque(maxlen=200),
     }
 
 metrics = {
     1: new_path_metrics(),
     2: new_path_metrics(),
 }
+
+metrics_lock = threading.Lock()
+
+def printer_thread():
+    while True:
+        time.sleep(1.0)
+        with metrics_lock:
+            print("")
+            for path, m in metrics.items():
+                if not m["latency_hist"]:
+                    continue
+                avg_lat = sum(m["latency_hist"]) / len(m["latency_hist"])
+                avg_jit = sum(m["jitter_hist"]) / len(m["jitter_hist"])
+                avg_thr = sum(m["throughput_hist"]) / len(m["throughput_hist"])
+                total   = m["received"] + m["lost"]
+                loss    = m["lost"] / total * 100 if total else 0.0
+                print(f"[Path {path} — 1s avg]  latency={avg_lat:.2f}ms  jitter={avg_jit:.2f}ms  throughput={avg_thr:.2f}kbps  loss={loss:.1f}%")
+                m["latency_hist"].clear()
+                m["jitter_hist"].clear()
+                m["throughput_hist"].clear()
+
+t = threading.Thread(target=printer_thread, daemon=True)
+t.start()
 
 def update_and_print(path, seq, latency_ms, payload_size, addr):
     m = metrics[path]
@@ -58,6 +86,11 @@ def update_and_print(path, seq, latency_ms, payload_size, addr):
     total_expected = m["received"] + m["lost"]
     loss_pct = (m["lost"] / total_expected * 100) if total_expected > 0 else 0.0
 
+    # --- Save to history ---
+    m["latency_hist"].append(latency_ms)
+    m["jitter_hist"].append(jitter_ms)
+    m["throughput_hist"].append(throughput_kbps)
+
     print(
         f"[Path {path}] "
         f"seq={seq:<6} "
@@ -85,7 +118,8 @@ try:
             now_ns = time.time_ns()
             latency_ms = (now_ns - ts_ns) / 1_000_000
 
-            update_and_print(path, seq, latency_ms, len(payload), addr)
+            with metrics_lock:
+                update_and_print(path, seq, latency_ms, len(payload), addr)
 
 except KeyboardInterrupt:
     print("\n--- Final summary ---")

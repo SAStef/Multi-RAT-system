@@ -28,6 +28,7 @@ try:
 
             now_ns = time.time_ns()
             latency_ms = (now_ns - ts_ns) / 1_000_000
+            
 
             print(
                 f"addr={addr} path={path} seq={seq} "
