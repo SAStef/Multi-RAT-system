@@ -8,7 +8,7 @@ port1 = 6967         # First UDP channel
 port2 = 6968         # Second UDP channel
 pps = 20.0          
 payload_size = 32   
-count = 2         
+count = 1         
 HDR_FMT = "!IIQB3x"
 
 sock1 = s.socket(s.AF_INET, s.SOCK_DGRAM)
