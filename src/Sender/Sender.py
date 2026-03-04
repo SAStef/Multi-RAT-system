@@ -3,7 +3,7 @@ import os
 import time
 import struct
 
-ip = "192.38.81.6"   # Receiver IP
+ip = "10.209.154.26"  
 port1 = 6967         # First UDP channel
 port2 = 6968         # Second UDP channel
 pps = 20.0          
