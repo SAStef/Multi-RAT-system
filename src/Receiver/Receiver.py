@@ -20,7 +20,7 @@ try:
         for sock in readable:
             data, addr = sock.recvfrom(4096)
             if len(data) < HDR_SIZE:
-                print(f"[{addr}] Packet too short ({len(data)} bytes), skipping")
+                print(f"[{addr}] Packet too short ({len(data)} bytes), skipping", flush=True)
                 continue
 
             seq, session_id, ts_ns, path = struct.unpack(HDR_FMT, data[:HDR_SIZE])
