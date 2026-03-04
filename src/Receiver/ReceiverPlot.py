@@ -3,135 +3,96 @@ import struct
 import time
 import select
 
-PORT1    = 6967
-PORT2    = 6968
-HDR_FMT  = "!IIQB3x"
+PORT1 = 6967
+PORT2 = 6968
+HDR_FMT = "!IIQB3x"
 HDR_SIZE = struct.calcsize(HDR_FMT)  # 20 bytes
-
-STATS_INTERVAL = 5.0  # Print stats every N seconds
-
-# Per-path metrics
-metrics = {
-    1: {
-        "received":       0,
-        "last_seq":       -1,
-        "lost":           0,
-        "latencies":      [],   # ms
-        "last_latency":   None, # for jitter calculation
-        "jitters":        [],   # ms
-        "bytes":          0,
-        "window_start":   None, # for throughput window
-    },
-    2: {
-        "received":       0,
-        "last_seq":       -1,
-        "lost":           0,
-        "latencies":      [],
-        "last_latency":   None,
-        "jitters":        [],
-        "bytes":          0,
-        "window_start":   None,
-    },
-}
 
 sock1 = s.socket(s.AF_INET, s.SOCK_DGRAM)
 sock2 = s.socket(s.AF_INET, s.SOCK_DGRAM)
 sock1.bind(("0.0.0.0", PORT1))
 sock2.bind(("0.0.0.0", PORT2))
+print(f"Listening on UDP {PORT1} (path 1) and {PORT2} (path 2)...\n")
 
-print(f"Listening on UDP {PORT1} (path 1) and {PORT2} (path 2)...")
-print(f"Printing stats every {STATS_INTERVAL:.0f}s\n")
+def new_path_metrics():
+    return {
+        "received":     0,
+        "last_seq":     -1,
+        "lost":         0,
+        "last_latency": None,   
+        "bytes":        0,
+        "start_time":   None,   
+    }
 
-last_stats_time = time.perf_counter()
+metrics = {
+    1: new_path_metrics(),
+    2: new_path_metrics(),
+}
 
+def update_and_print(path, seq, latency_ms, payload_size, addr):
+    m = metrics[path]
 
-def update_metrics(path: int, seq: int, ts_ns: int, pkt_size: int):
-    m   = metrics[path]
-    now = time.time_ns()
-
-    # --- Latency ---
-    latency_ms = (now - ts_ns) / 1_000_000
-    m["latencies"].append(latency_ms)
-
-    # --- Jitter (RFC 3550: mean absolute difference between consecutive latencies) ---
-    if m["last_latency"] is not None:
-        jitter = abs(latency_ms - m["last_latency"])
-        m["jitters"].append(jitter)
-    m["last_latency"] = latency_ms
-
-    # --- Packet loss (gap in sequence numbers) ---
-    if m["last_seq"] >= 0:
-        gap = seq - m["last_seq"] - 1
-        if gap > 0:
-            m["lost"] += gap
+    # --- Packet count & loss ---
+    m["received"] += 1
+    if m["last_seq"] >= 0 and seq > m["last_seq"] + 1:
+        lost = seq - m["last_seq"] - 1
+        m["lost"] += lost
     m["last_seq"] = seq
 
+    # --- Jitter (RFC 3550 style: |prev_latency - cur_latency|) ---
+    if m["last_latency"] is not None:
+        jitter_ms = abs(latency_ms - m["last_latency"])
+    else:
+        jitter_ms = 0.0
+    m["last_latency"] = latency_ms
+
     # --- Throughput ---
-    if m["window_start"] is None:
-        m["window_start"] = time.perf_counter()
-    m["bytes"]    += pkt_size
-    m["received"] += 1
+    m["bytes"] += payload_size
+    now = time.perf_counter()
+    if m["start_time"] is None:
+        m["start_time"] = now
+    elapsed = now - m["start_time"]
+    throughput_kbps = (m["bytes"] * 8 / 1000) / elapsed if elapsed > 0 else 0.0
 
+    # --- Loss rate ---
+    total_expected = m["received"] + m["lost"]
+    loss_pct = (m["lost"] / total_expected * 100) if total_expected > 0 else 0.0
 
-def print_stats():
-    print("=" * 60)
-    for path, m in metrics.items():
-        rx   = m["received"]
-        lost = m["lost"]
-        total_expected = rx + lost
-
-        # Latency
-        avg_lat = sum(m["latencies"]) / len(m["latencies"]) if m["latencies"] else 0.0
-        min_lat = min(m["latencies"])                        if m["latencies"] else 0.0
-        max_lat = max(m["latencies"])                        if m["latencies"] else 0.0
-
-        # Jitter
-        avg_jitter = sum(m["jitters"]) / len(m["jitters"]) if m["jitters"] else 0.0
-
-        # Throughput
-        elapsed = time.perf_counter() - m["window_start"] if m["window_start"] else 1
-        throughput_kbps = (m["bytes"] * 8 / 1000) / elapsed if elapsed > 0 else 0.0
-
-        # Packet loss %
-        loss_pct = (lost / total_expected * 100) if total_expected > 0 else 0.0
-
-        print(f"  Path {path}:")
-        print(f"    Received     : {rx} packets")
-        print(f"    Latency      : avg={avg_lat:.2f}ms  min={min_lat:.2f}ms  max={max_lat:.2f}ms")
-        print(f"    Jitter       : avg={avg_jitter:.2f}ms")
-        print(f"    Packet loss  : {lost} lost / {total_expected} expected ({loss_pct:.1f}%)")
-        print(f"    Throughput   : {throughput_kbps:.1f} kbps")
-        print()
-    print("=" * 60 + "\n")
-
+    print(
+        f"[Path {path}] "
+        f"seq={seq:<6} "
+        f"addr={addr[0]}:{addr[1]}  "
+        f"latency={latency_ms:>8.2f} ms  "
+        f"jitter={jitter_ms:>7.2f} ms  "
+        f"throughput={throughput_kbps:>8.2f} kbps  "
+        f"lost={m['lost']} ({loss_pct:.1f}%)",
+        flush=True,
+    )
 
 try:
     while True:
         readable, _, _ = select.select([sock1, sock2], [], [], 1.0)
         for sock in readable:
             data, addr = sock.recvfrom(4096)
+
             if len(data) < HDR_SIZE:
-                print(f"[{addr}] Packet too short ({len(data)} bytes), skipping")
+                print(f"[{addr}] Packet too short ({len(data)} bytes), skipping", flush=True)
                 continue
 
             seq, session_id, ts_ns, path = struct.unpack(HDR_FMT, data[:HDR_SIZE])
+            payload = data[HDR_SIZE:]
 
-            update_metrics(path, seq, ts_ns, len(data))
+            now_ns = time.time_ns()
+            latency_ms = (now_ns - ts_ns) / 1_000_000
 
-            latency_ms = (time.time_ns() - ts_ns) / 1_000_000
-            print(
-                f"path={path} seq={seq:>6} session={session_id:#010x} "
-                f"latency={latency_ms:>7.2f}ms  addr={addr}"
-            )
-
-        # Print stats every STATS_INTERVAL seconds
-        if time.perf_counter() - last_stats_time >= STATS_INTERVAL:
-            print_stats()
-            last_stats_time = time.perf_counter()
+            update_and_print(path, seq, latency_ms, len(payload), addr)
 
 except KeyboardInterrupt:
-    print("\nFinal stats:")
-    print_stats()
+    print("\n--- Final summary ---")
+    for path, m in metrics.items():
+        total = m["received"] + m["lost"]
+        loss_pct = (m["lost"] / total * 100) if total > 0 else 0.0
+        print(f"  Path {path}: received={m['received']}  lost={m['lost']} ({loss_pct:.1f}%)")
 finally:
     sock1.close()
     sock2.close()
