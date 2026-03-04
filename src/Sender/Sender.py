@@ -28,7 +28,6 @@ try:
             time.sleep(next_send - now)
         ts_ns = time.time_ns()
         payload = os.urandom(payload_size)
-
         # Path 1
         packet1 = struct.pack(HDR_FMT, seq, session_id, ts_ns, 1) + payload
         sock1.sendto(packet1, (ip, port1))
