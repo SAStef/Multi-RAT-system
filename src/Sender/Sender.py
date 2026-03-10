@@ -4,12 +4,12 @@ import time
 import struct
 import binascii
 
-ip = "127.0.0.1"      # 127.0.0.1 = same machine, receiver's LAN IP = separate machines
+ip = "192.168.1.168"  
 port1 = 6967         # First UDP channel
 port2 = 6968         # Second UDP channel
 pps = 20.0          
 payload_size = 32   
-count = 0           # 0 = send indefinitely, >0 = send exactly N packets
+count = 0         
 HDR_FMT = "!IIQBHx"
 HDR_SIZE = struct.calcsize(HDR_FMT)
 
