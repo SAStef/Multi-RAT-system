@@ -21,6 +21,7 @@ import binascii
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from datetime import datetime
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 PORT1 = 6967
@@ -290,6 +291,13 @@ except KeyboardInterrupt:
     pass
 finally:
     stop_event.set()  # signal all receiver threads to exit
+
+    # Save plot to file before closing
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    plot_path = f"multirat_{timestamp}.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    print(f"\nPlot saved to {plot_path}")
+
     print("\n--- Final summary ---")
     for path, m in metrics.items():
         total    = m["received"] + m["lost"]
