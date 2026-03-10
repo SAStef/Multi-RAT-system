@@ -169,12 +169,18 @@ def receiver_thread(sock: socket.socket):
     and exit cleanly when the program shuts down.
     """
     sock.settimeout(1.0)
+    print(f"[Thread {threading.current_thread().name}] started, listening on port {sock.getsockname()[1]}")
     try:
         while not stop_event.is_set():
             try:
                 data, addr = sock.recvfrom(65535)
-            except TimeoutError:
-                continue  # no data — check stop_event and loop
+            except (TimeoutError, socket.timeout):
+                continue  # no data within timeout — check stop_event and loop
+            except OSError as exc:
+                if stop_event.is_set():
+                    break
+                print(f"[Thread {threading.current_thread().name}] socket error: {exc}")
+                break
 
             if len(data) < HDR_SIZE:
                 print(f"[{addr}] Packet too short ({len(data)} bytes), skipping")
