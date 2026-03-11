@@ -5,7 +5,6 @@ import select
 import threading
 import collections
 
-
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
