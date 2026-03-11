@@ -1,18 +1,19 @@
 /**
  * Multi-RAT Express Dashboard
  *
- * Receives metric snapshots from receiver.py via HTTP POST /metrics
- * and broadcasts them to all connected browsers via Socket.IO.
+ * Automatically starts receiver.py as a subprocess, so you only need:
+ *   node server.js          (terminal 1 — starts server + receiver)
+ *   python3 Sender.py       (terminal 2 — sends packets)
  *
- * Install:  npm install
- * Run:      node server.js
- * Open:     http://localhost:3000
+ * Open: http://localhost:3000
  */
 
-const express   = require('express');
-const http      = require('http');
+const express    = require('express');
+const http       = require('http');
 const { Server } = require('socket.io');
-const path      = require('path');
+const path       = require('path');
+const { spawn }  = require('child_process');
+const os         = require('os');
 
 const app        = express();
 const httpServer = http.createServer(app);
@@ -22,20 +23,18 @@ const io         = new Server(httpServer);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Routes ─────────────────────────────────────────────────────────────────────
-
-// Dashboard
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Metrics endpoint — called by receiver.py every second
 app.post('/metrics', (req, res) => {
-  io.emit('metrics', req.body);   // broadcast to all connected browsers
+  io.emit('metrics', req.body);
   res.sendStatus(200);
 });
 
-// ── Socket.IO ──────────────────────────────────────────────────────────────────
+// ── Socket.IO ─────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   console.log(`[Dashboard] Browser connected  (id=${socket.id})`);
   socket.on('disconnect', () => {
@@ -43,9 +42,30 @@ io.on('connection', (socket) => {
   });
 });
 
-// ── Start ──────────────────────────────────────────────────────────────────────
+// ── Start receiver.py as a subprocess ────────────────────────────────────────
 const PORT = 3000;
 httpServer.listen(PORT, () => {
-  console.log(`Dashboard → http://localhost:${PORT}`);
-  console.log('Waiting for metrics from receiver.py...');
+  console.log(`Dashboard    → http://localhost:${PORT}`);
+
+  // Use 'python' on Windows, 'python3' on macOS/Linux
+  const python = os.platform() === 'win32' ? 'python' : 'python3';
+  const receiverPath = path.join(__dirname, 'receiver.py');
+
+  const receiver = spawn(python, [receiverPath], { stdio: 'inherit' });
+
+  receiver.on('error', (err) => {
+    console.error(`[Receiver] Failed to start: ${err.message}`);
+  });
+
+  receiver.on('close', (code) => {
+    if (code !== 0) console.log(`[Receiver] Exited with code ${code}`);
+  });
+
+  // Kill receiver when server shuts down
+  process.on('SIGINT', () => {
+    receiver.kill();
+    process.exit();
+  });
+
+  console.log(`[Receiver]   Started (${python} receiver.py)`);
 });
