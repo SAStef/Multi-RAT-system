@@ -259,6 +259,7 @@ def receiver_thread(sock: socket.socket):
                 if frer_is_duplicate(session_id, seq):
                     if path in metrics:
                         metrics[path]["duplicates"] += 1
+                        print("Dropped a package")
                     # Drop — do not deliver to application layer
                     continue
 
