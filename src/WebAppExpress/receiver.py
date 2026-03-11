@@ -27,8 +27,17 @@ HDR_SIZE     = struct.calcsize(HDR_FMT)  # 21 bytes
 FRER_WINDOW  = 2000
 EXPRESS_URL  = "http://localhost:3000/metrics"
 
-# IP_RECVTTL: macOS=24, Linux=12
+import platform
+
+# ── Platform detection ─────────────────────────────────────────────────────────
+_IS_WINDOWS  = platform.system() == 'Windows'
+_HAS_RECVMSG = hasattr(socket.socket, 'recvmsg') and not _IS_WINDOWS
+
+# IP_RECVTTL socket option (macOS=24, Linux=12)
+# On macOS the ancillary cmsg_type is IP_RECVTTL(24), on Linux it is IP_TTL(4)
 _IP_RECVTTL  = getattr(socket, 'IP_RECVTTL', 24)
+_IP_TTL      = getattr(socket, 'IP_TTL', 4)
+_TTL_TYPES   = {_IP_RECVTTL, _IP_TTL}  # accept either
 
 # ── CRC ────────────────────────────────────────────────────────────────────────
 def crc16(data: bytes) -> int:
@@ -109,10 +118,14 @@ def _update(m: dict, seq: int, latency_ms: float, payload_size: int, hops=None):
 
 # ── Receiver thread ────────────────────────────────────────────────────────────
 def receiver_thread(sock: socket.socket):
-    try:
-        sock.setsockopt(socket.IPPROTO_IP, _IP_RECVTTL, 1)
-    except OSError:
-        print("[Receiver] Warning: IP_RECVTTL not supported — hops will not be tracked")
+    # Enable TTL reception — only on platforms that support recvmsg
+    if _HAS_RECVMSG:
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, _IP_RECVTTL, 1)
+        except OSError:
+            pass
+    else:
+        print("[Receiver] recvmsg not available on this platform — hops will show as —")
 
     sock.settimeout(1.0)
     port   = sock.getsockname()[1]
@@ -122,7 +135,11 @@ def receiver_thread(sock: socket.socket):
     try:
         while not stop_event.is_set():
             try:
-                data, ancdata, _flags, addr = sock.recvmsg(65535, ancbuf)
+                if _HAS_RECVMSG:
+                    data, ancdata, _flags, addr = sock.recvmsg(65535, ancbuf)
+                else:
+                    data, addr = sock.recvfrom(65535)
+                    ancdata = []
             except (TimeoutError, socket.timeout):
                 continue
             except OSError:
@@ -131,10 +148,12 @@ def receiver_thread(sock: socket.socket):
             if len(data) < HDR_SIZE:
                 continue
 
+            # Extract received TTL — cmsg_type is IP_RECVTTL on macOS, IP_TTL on Linux
             received_ttl = None
             for cmsg_level, cmsg_type, cmsg_data in ancdata:
-                if cmsg_level == socket.IPPROTO_IP and cmsg_type == socket.IP_TTL:
+                if cmsg_level == socket.IPPROTO_IP and cmsg_type in _TTL_TYPES:
                     received_ttl = struct.unpack('B', cmsg_data[:1])[0]
+                    break
 
             seq, session_id, ts_ns, path, sent_ttl, cs = struct.unpack(HDR_FMT, data[:HDR_SIZE])
             payload = data[HDR_SIZE:]
