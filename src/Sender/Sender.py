@@ -9,7 +9,7 @@ port1 = 6967         # First UDP channel
 port2 = 6968         # Second UDP channel
 pps = 20.0          
 payload_size = 32   
-count = 1         
+count = 10         
 HDR_FMT = "!IIQBHx"
 HDR_SIZE = struct.calcsize(HDR_FMT)
 
