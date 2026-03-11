@@ -76,6 +76,27 @@ metrics_lock = threading.Lock()
 t0           = time.perf_counter()  # reference time for the x-axis
 stop_event   = threading.Event()    # set on shutdown to stop all threads
 
+# ── Merged-stream metrics (post-FRER: only first-arriving copy of each seq) ───
+def new_merged_metrics() -> dict:
+    return {
+        "received":        0,
+        "lost":            0,
+        "last_seq":        -1,
+        "last_latency":    None,
+        "bytes":           0,
+        "start_time":      None,
+        "latency_hist":    collections.deque(maxlen=500),
+        "jitter_hist":     collections.deque(maxlen=500),
+        "throughput_hist": collections.deque(maxlen=500),
+        "ts":              collections.deque(maxlen=HISTORY),
+        "plot_latency":    collections.deque(maxlen=HISTORY),
+        "plot_jitter":     collections.deque(maxlen=HISTORY),
+        "plot_throughput": collections.deque(maxlen=HISTORY),
+        "plot_loss":       collections.deque(maxlen=HISTORY),
+    }
+
+merged_metrics = new_merged_metrics()
+
 # ── FRER deduplication table ───────────────────────────────────────────────────
 # Maintains a sliding window of recently seen (session_id, seq) pairs.
 # O(1) lookup via the companion set; the deque evicts the oldest entry when full.
@@ -93,6 +114,29 @@ def frer_is_duplicate(session_id: int, seq: int) -> bool:
     _frer_seen.append(key)
     _frer_set.add(key)
     return False
+
+# ── Merged-stream metric update (called only for first-arriving copy) ──────────
+def update_merged_metrics(seq: int, latency_ms: float, payload_size: int):
+    m = merged_metrics
+    m["received"] += 1
+
+    if m["last_seq"] >= 0 and seq > m["last_seq"] + 1:
+        m["lost"] += seq - m["last_seq"] - 1
+    m["last_seq"] = seq
+
+    jitter_ms = abs(latency_ms - m["last_latency"]) if m["last_latency"] is not None else 0.0
+    m["last_latency"] = latency_ms
+
+    m["bytes"] += payload_size
+    now = time.perf_counter()
+    if m["start_time"] is None:
+        m["start_time"] = now
+    elapsed = now - m["start_time"]
+    throughput_kbps = (m["bytes"] * 8 / 1000) / elapsed if elapsed > 0 else 0.0
+
+    m["latency_hist"].append(latency_ms)
+    m["jitter_hist"].append(jitter_ms)
+    m["throughput_hist"].append(throughput_kbps)
 
 # ── Per-path metric update (called for every valid packet, including dupes) ────
 def update_metrics(path: int, seq: int, latency_ms: float, payload_size: int):
@@ -121,43 +165,48 @@ def update_metrics(path: int, seq: int, latency_ms: float, payload_size: int):
     m["throughput_hist"].append(throughput_kbps)
 
 # ── Aggregator thread — builds 1-second plot points ───────────────────────────
+def _aggregate_one(m: dict, label: str, extra: str = ""):
+    """Compute 1-second averages for any metrics dict and append to its plot series."""
+    if not m["latency_hist"]:
+        return
+    now = time.perf_counter() - t0
+    avg_lat = sum(m["latency_hist"]) / len(m["latency_hist"])
+    avg_jit = sum(m["jitter_hist"])  / len(m["jitter_hist"])
+    avg_thr = sum(m["throughput_hist"]) / len(m["throughput_hist"])
+    total   = m["received"] + m["lost"]
+    loss    = m["lost"] / total * 100 if total else 0.0
+
+    m["ts"].append(now)
+    m["plot_latency"].append(avg_lat)
+    m["plot_jitter"].append(avg_jit)
+    m["plot_throughput"].append(avg_thr)
+    m["plot_loss"].append(loss)
+
+    m["latency_hist"].clear()
+    m["jitter_hist"].clear()
+    m["throughput_hist"].clear()
+
+    print(
+        f"[{label}]  "
+        f"latency={avg_lat:7.2f} ms  "
+        f"jitter={avg_jit:6.2f} ms  "
+        f"throughput={avg_thr:8.2f} kbps  "
+        f"loss={loss:5.1f}%"
+        + extra
+    )
+
 def aggregator_thread():
     while True:
         time.sleep(1.0)
         with metrics_lock:
-            now = time.perf_counter() - t0
             print()
             for path, m in metrics.items():
-                if not m["latency_hist"]:
-                    continue
-
-                avg_lat = sum(m["latency_hist"]) / len(m["latency_hist"])
-                avg_jit = sum(m["jitter_hist"])  / len(m["jitter_hist"])
-                avg_thr = sum(m["throughput_hist"]) / len(m["throughput_hist"])
-                total   = m["received"] + m["lost"]
-                loss    = m["lost"] / total * 100 if total else 0.0
-
-                # Append to time-series
-                m["ts"].append(now)
-                m["plot_latency"].append(avg_lat)
-                m["plot_jitter"].append(avg_jit)
-                m["plot_throughput"].append(avg_thr)
-                m["plot_loss"].append(loss)
-
-                # Clear rolling buckets for next second
-                m["latency_hist"].clear()
-                m["jitter_hist"].clear()
-                m["throughput_hist"].clear()
-
-                print(
-                    f"[{PATH_LABELS[path]}]  "
-                    f"latency={avg_lat:7.2f} ms  "
-                    f"jitter={avg_jit:6.2f} ms  "
-                    f"throughput={avg_thr:8.2f} kbps  "
-                    f"loss={loss:5.1f}%  "
-                    f"dupes={m['duplicates']}  "
-                    f"crc_err={m['crc_errors']}"
+                _aggregate_one(
+                    m,
+                    PATH_LABELS[path],
+                    f"  dupes={m['duplicates']}  crc_err={m['crc_errors']}"
                 )
+            _aggregate_one(merged_metrics, "Merged")
 
 threading.Thread(target=aggregator_thread, daemon=True).start()
 
@@ -213,8 +262,8 @@ def receiver_thread(sock: socket.socket):
                     # Drop — do not deliver to application layer
                     continue
 
-            # First copy → delivered to application layer
-            # (extend here with forwarding, buffering, etc.)
+                # First copy → update merged stream and deliver to application layer
+                update_merged_metrics(seq, latency_ms, len(payload))
 
     except Exception as exc:
         print(f"Receiver error on path: {exc}")
@@ -227,8 +276,9 @@ threading.Thread(target=receiver_thread, args=(sock2,), name="rx-path2", daemon=
 
 # ── Live plot ──────────────────────────────────────────────────────────────────
 COLORS = {
-    1: {"line": "#4C9BE8", "loss": "#F5A623"},
-    2: {"line": "#50C878", "loss": "#E05C5C"},
+    1:        {"line": "#4C9BE8", "loss": "#F5A623"},
+    2:        {"line": "#50C878", "loss": "#E05C5C"},
+    "merged": {"line": "#BB86FC", "loss": "#BB86FC"},
 }
 
 fig, axes = plt.subplots(4, 1, figsize=(12, 9), sharex=True)
@@ -244,8 +294,8 @@ ax_loss.set_ylim(-1, 105)
 
 plot_lines = {}
 for path in (1, 2):
-    c  = COLORS[path]["line"]
-    cl = COLORS[path]["loss"]
+    c   = COLORS[path]["line"]
+    cl  = COLORS[path]["loss"]
     lbl = PATH_LABELS[path]
     plot_lines[path] = {
         "lat":  ax_lat.plot([], [], color=c,  lw=1.5, label=lbl)[0],
@@ -253,6 +303,15 @@ for path in (1, 2):
         "thr":  ax_thr.plot([], [], color=c,  lw=1.5, label=lbl)[0],
         "loss": ax_loss.plot([], [], color=cl, lw=1.5, label=lbl, drawstyle="steps-post")[0],
     }
+
+# Merged stream — dashed purple line on every subplot
+cm = COLORS["merged"]["line"]
+plot_lines["merged"] = {
+    "lat":  ax_lat.plot([], [], color=cm, lw=2.0, ls="--", label="Merged")[0],
+    "jit":  ax_jit.plot([], [], color=cm, lw=2.0, ls="--", label="Merged")[0],
+    "thr":  ax_thr.plot([], [], color=cm, lw=2.0, ls="--", label="Merged")[0],
+    "loss": ax_loss.plot([], [], color=cm, lw=2.0, ls="--", label="Merged", drawstyle="steps-post")[0],
+}
 
 for ax in axes:
     ax.legend(loc="upper left", fontsize=8)
@@ -271,6 +330,14 @@ def animate(_frame):
             plot_lines[path]["jit"].set_data(ts, list(m["plot_jitter"]))
             plot_lines[path]["thr"].set_data(ts, list(m["plot_throughput"]))
             plot_lines[path]["loss"].set_data(ts, list(m["plot_loss"]))
+
+        m = merged_metrics
+        if m["ts"]:
+            ts = list(m["ts"])
+            plot_lines["merged"]["lat"].set_data(ts, list(m["plot_latency"]))
+            plot_lines["merged"]["jit"].set_data(ts, list(m["plot_jitter"]))
+            plot_lines["merged"]["thr"].set_data(ts, list(m["plot_throughput"]))
+            plot_lines["merged"]["loss"].set_data(ts, list(m["plot_loss"]))
 
     now = time.perf_counter() - t0
     for ax in axes:
@@ -309,3 +376,11 @@ finally:
             f"duplicates={m['duplicates']}  "
             f"crc_errors={m['crc_errors']}"
         )
+    m = merged_metrics
+    total    = m["received"] + m["lost"]
+    loss_pct = (m["lost"] / total * 100) if total > 0 else 0.0
+    print(
+        f"  Merged (FRER): "
+        f"received={m['received']}  "
+        f"lost={m['lost']} ({loss_pct:.1f}%)"
+    )
