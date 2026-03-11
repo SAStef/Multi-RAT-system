@@ -156,6 +156,10 @@
       <div class="lbl">Dupes</div>
       <div class="val" id="p1-dupes">—</div>
     </div>
+    <div class="stat-card path1">
+      <div class="lbl">Hops</div>
+      <div class="val" id="p1-hops">—</div>
+    </div>
   </div>
 
   <div class="stat-group">
@@ -183,6 +187,10 @@
     <div class="stat-card path2">
       <div class="lbl">Dupes</div>
       <div class="val" id="p2-dupes">—</div>
+    </div>
+    <div class="stat-card path2">
+      <div class="lbl">Hops</div>
+      <div class="val" id="p2-hops">—</div>
     </div>
   </div>
 
@@ -229,6 +237,10 @@
   <div class="chart-card">
     <h3>Packet Loss (%)</h3>
     <canvas id="c-loss"></canvas>
+  </div>
+  <div class="chart-card" style="grid-column: 1 / -1;">
+    <h3>Router Hops — Path 1 vs Path 2 &nbsp;<span style="font-size:0.7rem;color:#555">(0 hops = local/loopback test)</span></h3>
+    <canvas id="c-hops"></canvas>
   </div>
 </div>
 
@@ -311,6 +323,7 @@
     jitter:     makeChart('c-jitter'),
     throughput: makeChart('c-throughput'),
     loss:       makeChart('c-loss'),
+    hops:       makeChart('c-hops'),
   };
 
   // ── Push one data point to a chart ────────────────────────────────────────
@@ -359,6 +372,7 @@
       set('p1-loss',  p1.loss.toFixed(1)        + '%');
       set('p1-pkts',  p1.received);
       set('p1-dupes', p1.duplicates ?? 0);
+      set('p1-hops',  p1.hops !== null && p1.hops !== undefined ? p1.hops : '—');
     }
     // Stat cards — Path 2
     if (p2.latency !== undefined) {
@@ -368,6 +382,7 @@
       set('p2-loss',  p2.loss.toFixed(1)        + '%');
       set('p2-pkts',  p2.received);
       set('p2-dupes', p2.duplicates ?? 0);
+      set('p2-hops',  p2.hops !== null && p2.hops !== undefined ? p2.hops : '—');
     }
     // Stat cards — Merged
     if (m.latency !== undefined) {
@@ -382,7 +397,8 @@
     push(charts.latency,    label, p1.latency,    p2.latency,    m.latency);
     push(charts.jitter,     label, p1.jitter,     p2.jitter,     m.jitter);
     push(charts.throughput, label, p1.throughput, p2.throughput, m.throughput);
-    push(charts.loss,       label, p1.loss,        p2.loss,       m.loss);
+    push(charts.loss,       label, p1.loss,       p2.loss,       m.loss);
+    push(charts.hops,       label, p1.hops,       p2.hops,       null);
   });
 </script>
 </body>
