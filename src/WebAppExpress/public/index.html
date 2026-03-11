@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-RAT Dashboard</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #1a1d27;
+      border-bottom: 1px solid #2a2d3a;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; letter-spacing: 0.5px; color: #fff; }
+    .badge {
+      font-size: 0.72rem;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-weight: 600;
+      background: #2a2d3a;
+      color: #888;
+      transition: all 0.3s;
+    }
+    .badge.connected { background: #1b3a28; color: #50C878; }
+
+    /* ── Stat bar ── */
+    .stat-bar {
+      background: #13151f;
+      border-bottom: 1px solid #2a2d3a;
+      padding: 10px 24px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+    .stat-group { display: flex; gap: 8px; align-items: stretch; }
+    .stat-group-label {
+      writing-mode: vertical-lr;
+      transform: rotate(180deg);
+      font-size: 0.65rem;
+      color: #555;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 2px;
+    }
+    .stat-card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      padding: 8px 14px;
+      min-width: 100px;
+    }
+    .stat-card .lbl { font-size: 0.65rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card .val { font-size: 1.15rem; font-weight: 700; margin-top: 1px; }
+    .path1  .val { color: #4C9BE8; }
+    .path2  .val { color: #50C878; }
+    .merged .val { color: #BB86FC; }
+
+    /* ── Chart grid ── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 12px 16px 16px;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+    .chart-card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      min-height: 180px;
+    }
+    .chart-card h3 { font-size: 0.78rem; color: #888; font-weight: 500; margin-bottom: 8px; flex-shrink: 0; }
+    .chart-card canvas { flex: 1; min-height: 0; }
+    .full-width { grid-column: 1 / -1; min-height: 140px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Multi-RAT &mdash; FRER Live Dashboard</h1>
+  <span class="badge" id="conn-badge">● Disconnected</span>
+</header>
+
+<div class="stat-bar">
+
+  <div class="stat-group">
+    <div class="stat-group-label">Path 1</div>
+    <div class="stat-card path1"><div class="lbl">Latency</div><div class="val" id="p1-lat">—</div></div>
+    <div class="stat-card path1"><div class="lbl">Jitter</div><div class="val" id="p1-jit">—</div></div>
+    <div class="stat-card path1"><div class="lbl">Throughput</div><div class="val" id="p1-thr">—</div></div>
+    <div class="stat-card path1"><div class="lbl">Loss</div><div class="val" id="p1-loss">—</div></div>
+    <div class="stat-card path1"><div class="lbl">Pkts</div><div class="val" id="p1-pkts">—</div></div>
+    <div class="stat-card path1"><div class="lbl">Dupes</div><div class="val" id="p1-dupes">—</div></div>
+    <div class="stat-card path1"><div class="lbl">Hops</div><div class="val" id="p1-hops">—</div></div>
+  </div>
+
+  <div class="stat-group">
+    <div class="stat-group-label">Path 2</div>
+    <div class="stat-card path2"><div class="lbl">Latency</div><div class="val" id="p2-lat">—</div></div>
+    <div class="stat-card path2"><div class="lbl">Jitter</div><div class="val" id="p2-jit">—</div></div>
+    <div class="stat-card path2"><div class="lbl">Throughput</div><div class="val" id="p2-thr">—</div></div>
+    <div class="stat-card path2"><div class="lbl">Loss</div><div class="val" id="p2-loss">—</div></div>
+    <div class="stat-card path2"><div class="lbl">Pkts</div><div class="val" id="p2-pkts">—</div></div>
+    <div class="stat-card path2"><div class="lbl">Dupes</div><div class="val" id="p2-dupes">—</div></div>
+    <div class="stat-card path2"><div class="lbl">Hops</div><div class="val" id="p2-hops">—</div></div>
+  </div>
+
+  <div class="stat-group">
+    <div class="stat-group-label">Merged</div>
+    <div class="stat-card merged"><div class="lbl">Latency</div><div class="val" id="m-lat">—</div></div>
+    <div class="stat-card merged"><div class="lbl">Jitter</div><div class="val" id="m-jit">—</div></div>
+    <div class="stat-card merged"><div class="lbl">Throughput</div><div class="val" id="m-thr">—</div></div>
+    <div class="stat-card merged"><div class="lbl">Loss</div><div class="val" id="m-loss">—</div></div>
+    <div class="stat-card merged"><div class="lbl">Pkts</div><div class="val" id="m-pkts">—</div></div>
+  </div>
+
+</div>
+
+<div class="charts-grid">
+  <div class="chart-card"><h3>Latency (ms)</h3><canvas id="c-latency"></canvas></div>
+  <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="c-jitter"></canvas></div>
+  <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="c-throughput"></canvas></div>
+  <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="c-loss"></canvas></div>
+  <div class="chart-card full-width">
+    <h3>Router Hops — Path 1 vs Path 2 &nbsp;<span style="font-size:0.7rem;color:#555">(0 = local/loopback test)</span></h3>
+    <canvas id="c-hops"></canvas>
+  </div>
+</div>
+
+<script>
+  const MAX = 60;
+
+  function makeChart(id) {
+    return new Chart(document.getElementById(id), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Path 1', data: [], borderColor: '#4C9BE8', backgroundColor: 'rgba(76,155,232,0.07)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+          { label: 'Path 2', data: [], borderColor: '#50C878', backgroundColor: 'rgba(80,200,120,0.07)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+          { label: 'Merged', data: [], borderColor: '#BB86FC', backgroundColor: 'transparent', borderWidth: 2, borderDash: [6,3], pointRadius: 0, tension: 0.3 },
+        ],
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#888', font: { size: 10 }, boxWidth: 12, padding: 12 } },
+          tooltip: { backgroundColor: '#1e2130', borderColor: '#2a2d3a', borderWidth: 1, titleColor: '#ccc', bodyColor: '#aaa' },
+        },
+        scales: {
+          x: { ticks: { color: '#555', maxTicksLimit: 8, font: { size: 10 } }, grid: { color: '#1e2130' } },
+          y: { beginAtZero: true, ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#1e2130' } },
+        },
+      },
+    });
+  }
+
+  const charts = {
+    latency:    makeChart('c-latency'),
+    jitter:     makeChart('c-jitter'),
+    throughput: makeChart('c-throughput'),
+    loss:       makeChart('c-loss'),
+    hops:       makeChart('c-hops'),
+  };
+
+  function push(chart, label, p1, p2, merged) {
+    chart.data.labels.push(label);
+    chart.data.datasets[0].data.push(p1  ?? null);
+    chart.data.datasets[1].data.push(p2  ?? null);
+    chart.data.datasets[2].data.push(merged ?? null);
+    if (chart.data.labels.length > MAX) {
+      chart.data.labels.shift();
+      chart.data.datasets.forEach(ds => ds.data.shift());
+    }
+    chart.update('none');
+  }
+
+  function set(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  // ── Socket.IO ────────────────────────────────────────────────────────────────
+  const socket = io();
+  const badge  = document.getElementById('conn-badge');
+
+  socket.on('connect',    () => { badge.textContent = '● Connected';    badge.className = 'badge connected'; });
+  socket.on('disconnect', () => { badge.textContent = '● Disconnected'; badge.className = 'badge'; });
+
+  socket.on('metrics', (data) => {
+    const label = data.time + 's';
+    const p1 = data.paths?.['1'] || {};
+    const p2 = data.paths?.['2'] || {};
+    const m  = data.merged       || {};
+
+    if (p1.latency !== undefined) {
+      set('p1-lat',   p1.latency.toFixed(1)    + ' ms');
+      set('p1-jit',   p1.jitter.toFixed(1)     + ' ms');
+      set('p1-thr',   p1.throughput.toFixed(0) + ' kbps');
+      set('p1-loss',  p1.loss.toFixed(1)        + '%');
+      set('p1-pkts',  p1.received);
+      set('p1-dupes', p1.duplicates ?? 0);
+      set('p1-hops',  p1.hops ?? '—');
+    }
+    if (p2.latency !== undefined) {
+      set('p2-lat',   p2.latency.toFixed(1)    + ' ms');
+      set('p2-jit',   p2.jitter.toFixed(1)     + ' ms');
+      set('p2-thr',   p2.throughput.toFixed(0) + ' kbps');
+      set('p2-loss',  p2.loss.toFixed(1)        + '%');
+      set('p2-pkts',  p2.received);
+      set('p2-dupes', p2.duplicates ?? 0);
+      set('p2-hops',  p2.hops ?? '—');
+    }
+    if (m.latency !== undefined) {
+      set('m-lat',  m.latency.toFixed(1)    + ' ms');
+      set('m-jit',  m.jitter.toFixed(1)     + ' ms');
+      set('m-thr',  m.throughput.toFixed(0) + ' kbps');
+      set('m-loss', m.loss.toFixed(1)        + '%');
+      set('m-pkts', m.received);
+    }
+
+    push(charts.latency,    label, p1.latency,    p2.latency,    m.latency);
+    push(charts.jitter,     label, p1.jitter,     p2.jitter,     m.jitter);
+    push(charts.throughput, label, p1.throughput, p2.throughput, m.throughput);
+    push(charts.loss,       label, p1.loss,       p2.loss,       m.loss);
+    push(charts.hops,       label, p1.hops,       p2.hops,       null);
+  });
+</script>
+</body>
+</html>
