@@ -23,10 +23,12 @@
       background: #1a1d27;
       border-bottom: 1px solid #2a2d3a;
       padding: 0 24px;
+      padding: 0 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
+      height: 48px;
       height: 48px;
     }
     header h1 { font-size: 0.95rem; font-weight: 600; color: #fff; }
@@ -59,8 +61,11 @@
       border-bottom: 1px solid #2a2d3a;
       padding: 10px 24px;
       display: flex; gap: 10px; flex-wrap: wrap; flex-shrink: 0;
+      display: flex; gap: 10px; flex-wrap: wrap; flex-shrink: 0;
     }
     .stat-card {
+      background: #1a1d27; border: 1px solid #2a2d3a;
+      border-radius: 8px; padding: 8px 16px; min-width: 110px;
       background: #1a1d27; border: 1px solid #2a2d3a;
       border-radius: 8px; padding: 8px 16px; min-width: 110px;
     }
@@ -88,9 +93,14 @@
       grid-template-columns: 1fr 1fr;
       gap: 12px;
       padding: 0 16px 16px;
+      padding: 0 16px 16px;
     }
     .charts-grid.padded { padding: 12px 16px 16px; }
+    .charts-grid.padded { padding: 12px 16px 16px; }
     .chart-card {
+      background: #1a1d27; border: 1px solid #2a2d3a;
+      border-radius: 10px; padding: 12px 16px;
+      display: flex; flex-direction: column; height: 200px;
       background: #1a1d27; border: 1px solid #2a2d3a;
       border-radius: 10px; padding: 12px 16px;
       display: flex; flex-direction: column; height: 200px;
@@ -211,8 +221,41 @@
     <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="p2-c-thr"></canvas></div>
     <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="p2-c-loss"></canvas></div>
   </div>
+<!-- ══ PATH 2 ══ -->
+<div class="panel" id="panel-path2">
+  <div class="stat-bar">
+    <div class="stat-card c2"><div class="lbl">Latency</div><div class="val" id="p2-lat">—</div></div>
+    <div class="stat-card c2"><div class="lbl">Jitter</div><div class="val" id="p2-jit">—</div></div>
+    <div class="stat-card c2"><div class="lbl">Throughput</div><div class="val" id="p2-thr">—</div></div>
+    <div class="stat-card c2"><div class="lbl">Loss</div><div class="val" id="p2-loss">—</div></div>
+    <div class="stat-card c2"><div class="lbl">Packets</div><div class="val" id="p2-pkts">—</div></div>
+    <div class="stat-card c2"><div class="lbl">Duplicates</div><div class="val" id="p2-dupes">—</div></div>
+    <div class="stat-card c2"><div class="lbl">CRC Errors</div><div class="val" id="p2-crc">—</div></div>
+    <div class="stat-card c2"><div class="lbl">Hops</div><div class="val" id="p2-hops">—</div></div>
+  </div>
+  <div class="charts-grid padded">
+    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="p2-c-lat"></canvas></div>
+    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="p2-c-jit"></canvas></div>
+    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="p2-c-thr"></canvas></div>
+    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="p2-c-loss"></canvas></div>
+  </div>
 </div>
 
+<!-- ══ MERGED ══ -->
+<div class="panel" id="panel-merged">
+  <div class="stat-bar">
+    <div class="stat-card cm"><div class="lbl">Latency</div><div class="val" id="m-lat">—</div></div>
+    <div class="stat-card cm"><div class="lbl">Jitter</div><div class="val" id="m-jit">—</div></div>
+    <div class="stat-card cm"><div class="lbl">Throughput</div><div class="val" id="m-thr">—</div></div>
+    <div class="stat-card cm"><div class="lbl">Loss</div><div class="val" id="m-loss">—</div></div>
+    <div class="stat-card cm"><div class="lbl">Packets</div><div class="val" id="m-pkts">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Dupes eliminated</div><div class="val" id="m-dupes">—</div></div>
+  </div>
+  <div class="charts-grid padded">
+    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="m-c-lat"></canvas></div>
+    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="m-c-jit"></canvas></div>
+    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="m-c-thr"></canvas></div>
+    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="m-c-loss"></canvas></div>
 <!-- ══ MERGED ══ -->
 <div class="panel" id="panel-merged">
   <div class="stat-bar">
@@ -254,9 +297,12 @@
         animation: false, responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
+          legend: { display: false },
           tooltip: { backgroundColor: '#1e2130', borderColor: '#2a2d3a', borderWidth: 1, titleColor: '#ccc', bodyColor: '#aaa' },
         },
         scales: {
+          x: { ticks: { color: '#555', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#1e2130' } },
+          y: { beginAtZero: true, ticks: { color: '#555', font: { size: 9 } }, grid: { color: '#1e2130' } },
           x: { ticks: { color: '#555', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#1e2130' } },
           y: { beginAtZero: true, ticks: { color: '#555', font: { size: 9 } }, grid: { color: '#1e2130' } },
         },
@@ -287,6 +333,8 @@
 
   let totalDupes = 0;
 
+  let totalDupes = 0;
+
   socket.on('metrics', (data) => {
     const label = data.time + 's';
     const p1 = data.paths?.['1'] || {};
@@ -302,6 +350,8 @@
       set('p1-thr', p1.throughput.toFixed(1)+' kbps'); set('p1-loss', p1.loss.toFixed(1)+'%');
       set('p1-pkts', p1.received); set('p1-dupes', p1.duplicates??0); set('p1-crc', p1.crc_errors??0); set('p1-hops', p1.hops??'—');
     }
+
+    // ── Path 2 tab stats ─────────────────────────────────────────────────
     if (p2.latency !== undefined) {
       set('ov-p2-lat', p2.latency.toFixed(2)+' ms'); set('ov-p2-jit', p2.jitter.toFixed(2)+' ms');
       set('ov-p2-thr', p2.throughput.toFixed(1)+' kbps'); set('ov-p2-loss', p2.loss.toFixed(1)+'%'); set('ov-p2-hops', p2.hops??'—');
@@ -309,6 +359,8 @@
       set('p2-thr', p2.throughput.toFixed(1)+' kbps'); set('p2-loss', p2.loss.toFixed(1)+'%');
       set('p2-pkts', p2.received); set('p2-dupes', p2.duplicates??0); set('p2-crc', p2.crc_errors??0); set('p2-hops', p2.hops??'—');
     }
+
+    // ── Merged tab stats ─────────────────────────────────────────────────
     if (m.latency !== undefined) {
       set('ov-m-lat', m.latency.toFixed(2)+' ms'); set('ov-m-jit', m.jitter.toFixed(2)+' ms');
       set('ov-m-thr', m.throughput.toFixed(1)+' kbps'); set('ov-m-loss', m.loss.toFixed(1)+'%'); set('ov-m-dupes', totalDupes);
