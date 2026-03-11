@@ -164,7 +164,7 @@ def receiver_thread(sock: socket.socket):
                         metrics[path]["crc_errors"] += 1
                 continue
 
-            latency_ms = (time.time_ns() - ts_ns) / 1_000_000
+            latency_ms = max(0.0, (time.time_ns() - ts_ns) / 1_000_000) 
             hops = (sent_ttl - received_ttl) if received_ttl is not None else None
 
             with metrics_lock:
