@@ -4,7 +4,7 @@ import time
 import struct
 import binascii
 
-ip = "192.168.1.168"  
+ip = "10.209.154.26"  
 port1 = 6967         # First UDP channel
 port2 = 6968         # Second UDP channel
 pps = 20.0          
