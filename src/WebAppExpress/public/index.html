@@ -46,10 +46,11 @@
       transition: all 0.15s;
     }
     .tab:hover { color: #aaa; }
-    .tab.active.t-overview { color: #fff;    border-color: #fff; }
-    .tab.active.t-path1    { color: #4C9BE8; border-color: #4C9BE8; }
-    .tab.active.t-path2    { color: #50C878; border-color: #50C878; }
-    .tab.active.t-merged   { color: #BB86FC; border-color: #BB86FC; }
+    .tab.active.t-overview,
+    .tab.active.t-path1,
+    .tab.active.t-path2,
+    .tab.active.t-merged,
+    .tab.active.t-packets  { color: #fff; border-color: #fff; }
 
     .panel { display: none; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; }
     .panel.active { display: flex; }
@@ -61,15 +62,15 @@
       display: flex; gap: 10px; flex-wrap: wrap; flex-shrink: 0;
     }
     .stat-card {
-      background: #1a1d27; border: 1px solid #2a2d3a;
+      background: #ffffff; border: 1px solid #ddd;
       border-radius: 8px; padding: 8px 16px; min-width: 110px;
     }
-    .stat-card .lbl { font-size: 0.65rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card .lbl { font-size: 0.65rem; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }
     .stat-card .val { font-size: 1.2rem; font-weight: 700; margin-top: 2px; }
-    .c1 .val { color: #4C9BE8; }
-    .c2 .val { color: #50C878; }
-    .cm .val { color: #BB86FC; }
-    .cw .val { color: #fff; }
+    .c1 .val { color: #111; }
+    .c2 .val { color: #111; }
+    .cm .val { color: #111; }
+    .cw .val { color: #111; }
 
     .path-section { padding: 14px 16px 0; flex-shrink: 0; }
     .path-section-header {
@@ -77,11 +78,12 @@
       text-transform: uppercase; margin-bottom: 10px;
       padding-left: 8px; border-left: 3px solid;
     }
-    .s1 { color: #4C9BE8; border-color: #4C9BE8; }
-    .s2 { color: #50C878; border-color: #50C878; }
-    .sm { color: #BB86FC; border-color: #BB86FC; }
+    .s1 { color: #fff; border-color: #fff; }
+    .s2 { color: #fff; border-color: #fff; }
+    .sm { color: #fff; border-color: #fff; }
 
     .mini-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .mini-stats .stat-card { background: #ffffff; border: 1px solid #ddd; }
 
     .charts-grid {
       display: grid;
@@ -91,11 +93,12 @@
     }
     .charts-grid.padded { padding: 12px 16px 16px; }
     .chart-card {
-      background: #1a1d27; border: 1px solid #2a2d3a;
+      background: #ffffff;
+      border: 1px solid #2a2d3a;
       border-radius: 10px; padding: 12px 16px;
       display: flex; flex-direction: column; height: 200px;
     }
-    .chart-card h3 { font-size: 0.78rem; color: #888; font-weight: 500; margin-bottom: 8px; flex-shrink: 0; }
+    .chart-card h3 { font-size: 0.78rem; color: #333; font-weight: 500; margin-bottom: 8px; flex-shrink: 0; }
     .chart-card canvas { flex: 1; min-height: 0; }
     .divider { height: 1px; background: #2a2d3a; margin: 4px 16px 0; flex-shrink: 0; }
   </style>
@@ -109,21 +112,25 @@
 
 <div class="tabs">
   <div class="tab t-overview active" data-panel="panel-overview">Overview</div>
-  <div class="tab t-path1"          data-panel="panel-path1">Path 1</div>
-  <div class="tab t-path2"          data-panel="panel-path2">Path 2</div>
+  <div class="tab t-path1"          data-panel="panel-path1" id="tab-p1">Path 1</div>
+  <div class="tab t-path2"          data-panel="panel-path2" id="tab-p2">Path 2</div>
   <div class="tab t-merged"         data-panel="panel-merged">Merged</div>
+  <div class="tab t-packets"        data-panel="panel-packets">Packets</div>
 </div>
 
 <!-- ══ OVERVIEW ══ -->
 <div class="panel active" id="panel-overview">
 
   <div class="path-section">
-    <div class="path-section-header s1">Path 1</div>
+    <div class="path-section-header s1" id="hdr-p1">Path 1</div>
     <div class="mini-stats">
       <div class="stat-card c1"><div class="lbl">Latency</div><div class="val" id="ov-p1-lat">—</div></div>
       <div class="stat-card c1"><div class="lbl">Jitter</div><div class="val" id="ov-p1-jit">—</div></div>
       <div class="stat-card c1"><div class="lbl">Throughput</div><div class="val" id="ov-p1-thr">—</div></div>
       <div class="stat-card c1"><div class="lbl">Loss</div><div class="val" id="ov-p1-loss">—</div></div>
+      <div class="stat-card c1"><div class="lbl">Packets</div><div class="val" id="ov-p1-pkts">—</div></div>
+      <div class="stat-card c1"><div class="lbl">Duplicates</div><div class="val" id="ov-p1-dupes">—</div></div>
+      <div class="stat-card c1"><div class="lbl">CRC Errors</div><div class="val" id="ov-p1-crc">—</div></div>
       <div class="stat-card c1"><div class="lbl">Hops</div><div class="val" id="ov-p1-hops">—</div></div>
     </div>
   </div>
@@ -137,12 +144,15 @@
   <div class="divider"></div>
 
   <div class="path-section">
-    <div class="path-section-header s2">Path 2</div>
+    <div class="path-section-header s2" id="hdr-p2">Path 2</div>
     <div class="mini-stats">
       <div class="stat-card c2"><div class="lbl">Latency</div><div class="val" id="ov-p2-lat">—</div></div>
       <div class="stat-card c2"><div class="lbl">Jitter</div><div class="val" id="ov-p2-jit">—</div></div>
       <div class="stat-card c2"><div class="lbl">Throughput</div><div class="val" id="ov-p2-thr">—</div></div>
       <div class="stat-card c2"><div class="lbl">Loss</div><div class="val" id="ov-p2-loss">—</div></div>
+      <div class="stat-card c2"><div class="lbl">Packets</div><div class="val" id="ov-p2-pkts">—</div></div>
+      <div class="stat-card c2"><div class="lbl">Duplicates</div><div class="val" id="ov-p2-dupes">—</div></div>
+      <div class="stat-card c2"><div class="lbl">CRC Errors</div><div class="val" id="ov-p2-crc">—</div></div>
       <div class="stat-card c2"><div class="lbl">Hops</div><div class="val" id="ov-p2-hops">—</div></div>
     </div>
   </div>
@@ -162,6 +172,7 @@
       <div class="stat-card cm"><div class="lbl">Jitter</div><div class="val" id="ov-m-jit">—</div></div>
       <div class="stat-card cm"><div class="lbl">Throughput</div><div class="val" id="ov-m-thr">—</div></div>
       <div class="stat-card cm"><div class="lbl">Loss</div><div class="val" id="ov-m-loss">—</div></div>
+      <div class="stat-card cm"><div class="lbl">Packets</div><div class="val" id="ov-m-pkts">—</div></div>
       <div class="stat-card cw"><div class="lbl">Dupes elim.</div><div class="val" id="ov-m-dupes">—</div></div>
     </div>
   </div>
@@ -231,7 +242,39 @@
   </div>
 </div>
 
+<!-- ══ PACKETS ══ -->
+<div class="panel" id="panel-packets">
+  <div class="stat-bar">
+    <div class="stat-card cw"><div class="lbl">Total Received</div><div class="val" id="pk-total">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Unique (Merged)</div><div class="val" id="pk-unique">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Duplicates Dropped</div><div class="val" id="pk-dupes">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Path 1 Packets</div><div class="val" id="pk-p1">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Path 2 Packets</div><div class="val" id="pk-p2">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Path 1 Lost</div><div class="val" id="pk-p1-lost">—</div></div>
+    <div class="stat-card cw"><div class="lbl">Path 2 Lost</div><div class="val" id="pk-p2-lost">—</div></div>
+    <div class="stat-card cw"><div class="lbl">CRC Errors</div><div class="val" id="pk-crc">—</div></div>
+  </div>
+  <div class="charts-grid padded">
+    <div class="chart-card"><h3>Total Received per path</h3><canvas id="pk-c-recv"></canvas></div>
+    <div class="chart-card"><h3>Duplicates Dropped</h3><canvas id="pk-c-dupes"></canvas></div>
+    <div class="chart-card"><h3>Packet Loss — Path 1 vs Path 2 (%)</h3><canvas id="pk-c-loss"></canvas></div>
+    <div class="chart-card"><h3>Unique Delivered (Merged)</h3><canvas id="pk-c-unique"></canvas></div>
+  </div>
+</div>
+
 <script>
+  // ── Interface names — change these to match your radio interfaces ──────────
+  const IF_NAME = {
+    1: 'WiFi',   // e.g. 'WiFi', 'LoRaWAN', '5G', 'LTE'
+    2: 'WiFi',   // e.g. 'WiFi', 'LoRaWAN', '5G', 'LTE'
+  };
+  // ──────────────────────────────────────────────────────────────────────────
+
+  document.getElementById('tab-p1').textContent  = IF_NAME[1];
+  document.getElementById('tab-p2').textContent  = IF_NAME[2];
+  document.getElementById('hdr-p1').textContent  = IF_NAME[1];
+  document.getElementById('hdr-p2').textContent  = IF_NAME[2];
+
   const MAX = 60;
 
   document.querySelectorAll('.tab').forEach(tab => {
@@ -243,33 +286,77 @@
     });
   });
 
-  function makeChart(id, color) {
+  function makeChart(id) {
     return new Chart(document.getElementById(id), {
       type: 'line',
       data: {
         labels: [],
-        datasets: [{ data: [], borderColor: color, backgroundColor: color + '18', borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true }],
+        datasets: [{ data: [], borderColor: '#111111', backgroundColor: 'rgba(0,0,0,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true }],
       },
       options: {
         animation: false, responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
-          tooltip: { backgroundColor: '#1e2130', borderColor: '#2a2d3a', borderWidth: 1, titleColor: '#ccc', bodyColor: '#aaa' },
+          tooltip: { backgroundColor: '#fff', borderColor: '#ccc', borderWidth: 1, titleColor: '#333', bodyColor: '#555' },
         },
         scales: {
-          x: { ticks: { color: '#555', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#1e2130' } },
-          y: { beginAtZero: true, ticks: { color: '#555', font: { size: 9 } }, grid: { color: '#1e2130' } },
+          x: { ticks: { color: '#999', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#e8e8e8' } },
+          y: { beginAtZero: true, ticks: { color: '#999', font: { size: 9 } }, grid: { color: '#e8e8e8' } },
         },
       },
     });
   }
 
-  const ovP1 = { lat: makeChart('ov-p1-c-lat','#4C9BE8'), jit: makeChart('ov-p1-c-jit','#4C9BE8'), thr: makeChart('ov-p1-c-thr','#4C9BE8'), loss: makeChart('ov-p1-c-loss','#4C9BE8') };
-  const ovP2 = { lat: makeChart('ov-p2-c-lat','#50C878'), jit: makeChart('ov-p2-c-jit','#50C878'), thr: makeChart('ov-p2-c-thr','#50C878'), loss: makeChart('ov-p2-c-loss','#50C878') };
-  const ovM  = { lat: makeChart('ov-m-c-lat', '#BB86FC'), jit: makeChart('ov-m-c-jit', '#BB86FC'), thr: makeChart('ov-m-c-thr', '#BB86FC'), loss: makeChart('ov-m-c-loss', '#BB86FC') };
-  const p1c  = { lat: makeChart('p1-c-lat',   '#4C9BE8'), jit: makeChart('p1-c-jit',   '#4C9BE8'), thr: makeChart('p1-c-thr',   '#4C9BE8'), loss: makeChart('p1-c-loss',   '#4C9BE8') };
-  const p2c  = { lat: makeChart('p2-c-lat',   '#50C878'), jit: makeChart('p2-c-jit',   '#50C878'), thr: makeChart('p2-c-thr',   '#50C878'), loss: makeChart('p2-c-loss',   '#50C878') };
-  const mc   = { lat: makeChart('m-c-lat',    '#BB86FC'), jit: makeChart('m-c-jit',    '#BB86FC'), thr: makeChart('m-c-thr',    '#BB86FC'), loss: makeChart('m-c-loss',    '#BB86FC') };
+  // Packet tab — dual-dataset chart (Path 1 + Path 2)
+  function makeDualChart(id, label1, color1, label2, color2) {
+    return new Chart(document.getElementById(id), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: label1, data: [], borderColor: color1, backgroundColor: 'rgba(0,0,0,0)', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
+          { label: label2, data: [], borderColor: color2, backgroundColor: 'rgba(0,0,0,0)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, borderDash: [4,3] },
+        ],
+      },
+      options: {
+        animation: false, responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: true, labels: { color: '#333', font: { size: 9 } } },
+          tooltip: { backgroundColor: '#fff', borderColor: '#ccc', borderWidth: 1, titleColor: '#333', bodyColor: '#555' },
+        },
+        scales: {
+          x: { ticks: { color: '#999', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#e8e8e8' } },
+          y: { beginAtZero: true, ticks: { color: '#999', font: { size: 9 } }, grid: { color: '#e8e8e8' } },
+        },
+      },
+    });
+  }
+
+  function pushDual(chart, label, val1, val2) {
+    chart.data.labels.push(label);
+    chart.data.datasets[0].data.push(val1 ?? null);
+    chart.data.datasets[1].data.push(val2 ?? null);
+    if (chart.data.labels.length > MAX) {
+      chart.data.labels.shift();
+      chart.data.datasets[0].data.shift();
+      chart.data.datasets[1].data.shift();
+    }
+    chart.update('none');
+  }
+
+  const pkc = {
+    recv:   makeDualChart('pk-c-recv',   IF_NAME[1], '#333', IF_NAME[2], '#999'),
+    dupes:  makeChart('pk-c-dupes'),
+    loss:   makeDualChart('pk-c-loss',   IF_NAME[1], '#333', IF_NAME[2], '#999'),
+    unique: makeChart('pk-c-unique'),
+  };
+
+  const ovP1 = { lat: makeChart('ov-p1-c-lat'), jit: makeChart('ov-p1-c-jit'), thr: makeChart('ov-p1-c-thr'), loss: makeChart('ov-p1-c-loss') };
+  const ovP2 = { lat: makeChart('ov-p2-c-lat'), jit: makeChart('ov-p2-c-jit'), thr: makeChart('ov-p2-c-thr'), loss: makeChart('ov-p2-c-loss') };
+  const ovM  = { lat: makeChart('ov-m-c-lat'),  jit: makeChart('ov-m-c-jit'),  thr: makeChart('ov-m-c-thr'),  loss: makeChart('ov-m-c-loss')  };
+  const p1c  = { lat: makeChart('p1-c-lat'),    jit: makeChart('p1-c-jit'),    thr: makeChart('p1-c-thr'),    loss: makeChart('p1-c-loss')    };
+  const p2c  = { lat: makeChart('p2-c-lat'),    jit: makeChart('p2-c-jit'),    thr: makeChart('p2-c-thr'),    loss: makeChart('p2-c-loss')    };
+  const mc   = { lat: makeChart('m-c-lat'),     jit: makeChart('m-c-jit'),     thr: makeChart('m-c-thr'),     loss: makeChart('m-c-loss')     };
 
   function push(chart, label, val) {
     chart.data.labels.push(label);
@@ -297,32 +384,51 @@
 
     if (p1.latency !== undefined) {
       set('ov-p1-lat', p1.latency.toFixed(2)+' ms'); set('ov-p1-jit', p1.jitter.toFixed(2)+' ms');
-      set('ov-p1-thr', p1.throughput.toFixed(1)+' kbps'); set('ov-p1-loss', p1.loss.toFixed(1)+'%'); set('ov-p1-hops', p1.hops??'—');
+      set('ov-p1-thr', p1.throughput.toFixed(1)+' kbps'); set('ov-p1-loss', p1.loss.toFixed(1)+'%');
+      set('ov-p1-pkts', p1.received); set('ov-p1-dupes', p1.duplicates??0); set('ov-p1-crc', p1.crc_errors??0); set('ov-p1-hops', p1.hops??'—');
       set('p1-lat', p1.latency.toFixed(2)+' ms'); set('p1-jit', p1.jitter.toFixed(2)+' ms');
       set('p1-thr', p1.throughput.toFixed(1)+' kbps'); set('p1-loss', p1.loss.toFixed(1)+'%');
       set('p1-pkts', p1.received); set('p1-dupes', p1.duplicates??0); set('p1-crc', p1.crc_errors??0); set('p1-hops', p1.hops??'—');
     }
     if (p2.latency !== undefined) {
       set('ov-p2-lat', p2.latency.toFixed(2)+' ms'); set('ov-p2-jit', p2.jitter.toFixed(2)+' ms');
-      set('ov-p2-thr', p2.throughput.toFixed(1)+' kbps'); set('ov-p2-loss', p2.loss.toFixed(1)+'%'); set('ov-p2-hops', p2.hops??'—');
+      set('ov-p2-thr', p2.throughput.toFixed(1)+' kbps'); set('ov-p2-loss', p2.loss.toFixed(1)+'%');
+      set('ov-p2-pkts', p2.received); set('ov-p2-dupes', p2.duplicates??0); set('ov-p2-crc', p2.crc_errors??0); set('ov-p2-hops', p2.hops??'—');
       set('p2-lat', p2.latency.toFixed(2)+' ms'); set('p2-jit', p2.jitter.toFixed(2)+' ms');
       set('p2-thr', p2.throughput.toFixed(1)+' kbps'); set('p2-loss', p2.loss.toFixed(1)+'%');
       set('p2-pkts', p2.received); set('p2-dupes', p2.duplicates??0); set('p2-crc', p2.crc_errors??0); set('p2-hops', p2.hops??'—');
     }
     if (m.latency !== undefined) {
       set('ov-m-lat', m.latency.toFixed(2)+' ms'); set('ov-m-jit', m.jitter.toFixed(2)+' ms');
-      set('ov-m-thr', m.throughput.toFixed(1)+' kbps'); set('ov-m-loss', m.loss.toFixed(1)+'%'); set('ov-m-dupes', totalDupes);
+      set('ov-m-thr', m.throughput.toFixed(1)+' kbps'); set('ov-m-loss', m.loss.toFixed(1)+'%');
+      set('ov-m-pkts', m.received); set('ov-m-dupes', totalDupes);
       set('m-lat', m.latency.toFixed(2)+' ms'); set('m-jit', m.jitter.toFixed(2)+' ms');
       set('m-thr', m.throughput.toFixed(1)+' kbps'); set('m-loss', m.loss.toFixed(1)+'%');
       set('m-pkts', m.received); set('m-dupes', totalDupes);
     }
 
-    push(ovP1.lat, label, p1.latency);    push(ovP1.jit, label, p1.jitter);    push(ovP1.thr, label, p1.throughput); push(ovP1.loss, label, p1.loss);
-    push(ovP2.lat, label, p2.latency);    push(ovP2.jit, label, p2.jitter);    push(ovP2.thr, label, p2.throughput); push(ovP2.loss, label, p2.loss);
-    push(ovM.lat,  label, m.latency);     push(ovM.jit,  label, m.jitter);     push(ovM.thr,  label, m.throughput);  push(ovM.loss,  label, m.loss);
-    push(p1c.lat,  label, p1.latency);    push(p1c.jit,  label, p1.jitter);    push(p1c.thr,  label, p1.throughput); push(p1c.loss,  label, p1.loss);
-    push(p2c.lat,  label, p2.latency);    push(p2c.jit,  label, p2.jitter);    push(p2c.thr,  label, p2.throughput); push(p2c.loss,  label, p2.loss);
-    push(mc.lat,   label, m.latency);     push(mc.jit,   label, m.jitter);     push(mc.thr,   label, m.throughput);  push(mc.loss,   label, m.loss);
+    // Packets tab
+    const total = (p1.received || 0) + (p2.received || 0);
+    const dupes = (p1.duplicates || 0) + (p2.duplicates || 0);
+    set('pk-total',   total);
+    set('pk-unique',  m.received ?? '—');
+    set('pk-dupes',   dupes);
+    set('pk-p1',      p1.received ?? '—');
+    set('pk-p2',      p2.received ?? '—');
+    set('pk-p1-lost', p1.lost ?? '—');
+    set('pk-p2-lost', p2.lost ?? '—');
+    set('pk-crc',     (p1.crc_errors || 0) + (p2.crc_errors || 0));
+    pushDual(pkc.recv,  label, p1.received,  p2.received);
+    pushDual(pkc.loss,  label, p1.loss,      p2.loss);
+    push(pkc.dupes,  label, dupes);
+    push(pkc.unique, label, m.received);
+
+    push(ovP1.lat, label, p1.latency);  push(ovP1.jit, label, p1.jitter);  push(ovP1.thr, label, p1.throughput); push(ovP1.loss, label, p1.loss);
+    push(ovP2.lat, label, p2.latency);  push(ovP2.jit, label, p2.jitter);  push(ovP2.thr, label, p2.throughput); push(ovP2.loss, label, p2.loss);
+    push(ovM.lat,  label, m.latency);   push(ovM.jit,  label, m.jitter);   push(ovM.thr,  label, m.throughput);  push(ovM.loss,  label, m.loss);
+    push(p1c.lat,  label, p1.latency);  push(p1c.jit,  label, p1.jitter);  push(p1c.thr,  label, p1.throughput); push(p1c.loss,  label, p1.loss);
+    push(p2c.lat,  label, p2.latency);  push(p2c.jit,  label, p2.jitter);  push(p2c.thr,  label, p2.throughput); push(p2c.loss,  label, p2.loss);
+    push(mc.lat,   label, m.latency);   push(mc.jit,   label, m.jitter);   push(mc.thr,   label, m.throughput);  push(mc.loss,   label, m.loss);
   });
 </script>
 </body>

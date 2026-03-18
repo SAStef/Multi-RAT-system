@@ -1,23 +1,23 @@
 """
-Multi-RAT Receiver — FRER + HTTP bridge to Express
+Multi-RAT Receiver — FRER (IEEE 802.1CB) + HTTP bridge to Express dashboard
 
-Runs the full FRER receiver logic and posts 1-second metric snapshots
-to the Express server at http://localhost:3000/metrics via HTTP POST.
+Thread architecture:
+  - receiver_thread(sock) × 2  — one per UDP socket, handles each path in parallel
+  - aggregator_thread()        — 1-second tick: compute averages, POST to Express
 
-Run AFTER starting server.js:
-    node server.js        (terminal 1)
-    python receiver.py    (terminal 2)
-    python ../Sender/Sender.py  (terminal 3)
+All shared state protected by metrics_lock.
+stop_event signals clean shutdown on Ctrl-C.
 """
 
 import socket
 import struct
+import time
 import threading
 import collections
 import binascii
-import time
 import json
 import urllib.request
+import platform
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 PORT1        = 6967
@@ -27,17 +27,14 @@ HDR_SIZE     = struct.calcsize(HDR_FMT)  # 21 bytes
 FRER_WINDOW  = 2000
 EXPRESS_URL  = "http://localhost:3000/metrics"
 
-import platform
+PATH_LABELS  = {1: "Path 1", 2: "Path 2"}
 
 # ── Platform detection ─────────────────────────────────────────────────────────
 _IS_WINDOWS  = platform.system() == 'Windows'
 _HAS_RECVMSG = hasattr(socket.socket, 'recvmsg') and not _IS_WINDOWS
-
-# IP_RECVTTL socket option (macOS=24, Linux=12)
-# On macOS the ancillary cmsg_type is IP_RECVTTL(24), on Linux it is IP_TTL(4)
-_IP_RECVTTL  = getattr(socket, 'IP_RECVTTL', 24)
-_IP_TTL      = getattr(socket, 'IP_TTL', 4)
-_TTL_TYPES   = {_IP_RECVTTL, _IP_TTL}  # accept either
+_IP_RECVTTL  = getattr(socket, 'IP_RECVTTL', 24)   # macOS = 24
+_IP_TTL      = getattr(socket, 'IP_TTL',     4)    # Linux  = 4
+_TTL_TYPES   = {_IP_RECVTTL, _IP_TTL}
 
 # ── CRC ────────────────────────────────────────────────────────────────────────
 def crc16(data: bytes) -> int:
@@ -79,11 +76,12 @@ metrics_lock   = threading.Lock()
 t0             = time.perf_counter()
 stop_event     = threading.Event()
 
-# ── FRER deduplication ────────────────────────────────────────────────────────
+# ── FRER deduplication (sliding window, O(1) lookup) ─────────────────────────
 _frer_seen: collections.deque = collections.deque(maxlen=FRER_WINDOW)
 _frer_set:  set                = set()
 
 def frer_is_duplicate(session_id: int, seq: int) -> bool:
+    """Return True if this (session_id, seq) was already delivered."""
     key = (session_id, seq)
     if key in _frer_set:
         return True
@@ -100,9 +98,11 @@ def _update(m: dict, seq: int, latency_ms: float, payload_size: int, hops=None):
         m["lost"] += seq - m["last_seq"] - 1
     m["last_seq"] = seq
 
+    # Jitter — RFC 3550 absolute difference
     jitter_ms = abs(latency_ms - m["last_latency"]) if m["last_latency"] is not None else 0.0
     m["last_latency"] = latency_ms
 
+    # Throughput (cumulative bytes → kbps)
     m["bytes"] += payload_size
     now = time.perf_counter()
     if m["start_time"] is None:
@@ -116,9 +116,8 @@ def _update(m: dict, seq: int, latency_ms: float, payload_size: int, hops=None):
     if hops is not None and "hops_hist" in m:
         m["hops_hist"].append(hops)
 
-# ── Receiver thread ────────────────────────────────────────────────────────────
+# ── Receiver thread — one per UDP socket ──────────────────────────────────────
 def receiver_thread(sock: socket.socket):
-    # Enable TTL reception — only on platforms that support recvmsg
     if _HAS_RECVMSG:
         try:
             sock.setsockopt(socket.IPPROTO_IP, _IP_RECVTTL, 1)
@@ -148,7 +147,7 @@ def receiver_thread(sock: socket.socket):
             if len(data) < HDR_SIZE:
                 continue
 
-            # Extract received TTL — cmsg_type is IP_RECVTTL on macOS, IP_TTL on Linux
+            # Extract received TTL from IP ancillary data
             received_ttl = None
             for cmsg_level, cmsg_type, cmsg_data in ancdata:
                 if cmsg_level == socket.IPPROTO_IP and cmsg_type in _TTL_TYPES:
@@ -162,9 +161,10 @@ def receiver_thread(sock: socket.socket):
                 with metrics_lock:
                     if path in metrics:
                         metrics[path]["crc_errors"] += 1
+                print(f"[Path {path}] BAD CRC seq={seq} from={addr}")
                 continue
 
-            latency_ms = max(0.0, (time.time_ns() - ts_ns) / 1_000_000) 
+            latency_ms = max(0.0, (time.time_ns() - ts_ns) / 1_000_000)
             hops = (sent_ttl - received_ttl) if received_ttl is not None else None
 
             with metrics_lock:
@@ -174,8 +174,10 @@ def receiver_thread(sock: socket.socket):
                 if frer_is_duplicate(session_id, seq):
                     if path in metrics:
                         metrics[path]["duplicates"] += 1
+                    print(f"[FRER DROP] seq={seq} path={path} — duplicate eliminated", flush=True)
                     continue
 
+                # First copy — deliver to merged stream
                 _update(merged_metrics, seq, latency_ms, len(payload))
 
     except Exception as exc:
@@ -183,7 +185,7 @@ def receiver_thread(sock: socket.socket):
     finally:
         sock.close()
 
-# ── Aggregator — builds snapshots and POSTs to Express ───────────────────────
+# ── Aggregator — 1-second snapshots → Express ─────────────────────────────────
 def _snapshot(m: dict):
     if not m["latency_hist"]:
         return None
@@ -217,7 +219,7 @@ def _snapshot(m: dict):
     return result
 
 def post_to_express(payload: dict):
-    """Fire-and-forget HTTP POST to Express — drops silently if server is not up."""
+    """Fire-and-forget HTTP POST — drops silently if Express is not up."""
     try:
         body = json.dumps(payload).encode()
         req  = urllib.request.Request(
@@ -228,7 +230,7 @@ def post_to_express(payload: dict):
         )
         urllib.request.urlopen(req, timeout=1)
     except Exception:
-        pass  # Express not running yet or busy — skip this tick
+        pass
 
 def aggregator_thread():
     while not stop_event.is_set():
@@ -236,16 +238,32 @@ def aggregator_thread():
         payload = {"time": round(time.perf_counter() - t0, 1), "paths": {}, "merged": {}}
 
         with metrics_lock:
+            print()
             for path, m in metrics.items():
                 snap = _snapshot(m)
                 if snap:
                     snap["duplicates"] = m["duplicates"]
                     snap["crc_errors"] = m["crc_errors"]
                     payload["paths"][str(path)] = snap
+                    print(
+                        f"[{PATH_LABELS[path]}]  "
+                        f"latency={snap['latency']:7.2f} ms  "
+                        f"jitter={snap['jitter']:6.2f} ms  "
+                        f"throughput={snap['throughput']:8.2f} kbps  "
+                        f"loss={snap['loss']:5.1f}%  "
+                        f"dupes={snap['duplicates']}  crc_err={snap['crc_errors']}"
+                    )
 
             snap = _snapshot(merged_metrics)
             if snap:
                 payload["merged"] = snap
+                print(
+                    f"[Merged]     "
+                    f"latency={snap['latency']:7.2f} ms  "
+                    f"jitter={snap['jitter']:6.2f} ms  "
+                    f"throughput={snap['throughput']:8.2f} kbps  "
+                    f"loss={snap['loss']:5.1f}%"
+                )
 
         post_to_express(payload)
 
@@ -256,8 +274,8 @@ if __name__ == "__main__":
     sock1.bind(("0.0.0.0", PORT1))
     sock2.bind(("0.0.0.0", PORT2))
 
-    threading.Thread(target=receiver_thread, args=(sock1,), daemon=True).start()
-    threading.Thread(target=receiver_thread, args=(sock2,), daemon=True).start()
+    threading.Thread(target=receiver_thread, args=(sock1,), name="rx-path1", daemon=True).start()
+    threading.Thread(target=receiver_thread, args=(sock2,), name="rx-path2", daemon=True).start()
     threading.Thread(target=aggregator_thread, daemon=True).start()
 
     print("Receiver running — posting metrics to", EXPRESS_URL)
