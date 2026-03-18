@@ -27,8 +27,8 @@ from datetime import datetime
 PORT1 = 6967
 PORT2 = 6968
 
-HDR_FMT  = "!IIQBHx"                   # seq(I) session(I) ts_ns(Q) path(B) crc16(H) pad(x)
-HDR_SIZE = struct.calcsize(HDR_FMT)    # 20 bytes
+HDR_FMT  = "!IIQBBHx"                  # seq(I) session(I) ts_ns(Q) path(B) sent_ttl(B) crc16(H) pad(x)
+HDR_SIZE = struct.calcsize(HDR_FMT)    # 21 bytes
 
 HISTORY     = 60    # seconds of data visible in the live plot
 FRER_WINDOW = 2000  # sliding window of (session_id, seq) pairs for dedup
@@ -236,7 +236,7 @@ def receiver_thread(sock: socket.socket):
                 print(f"[{addr}] Packet too short ({len(data)} bytes), skipping")
                 continue
 
-            seq, session_id, ts_ns, path, cs = struct.unpack(HDR_FMT, data[:HDR_SIZE])
+            seq, session_id, ts_ns, path, sent_ttl, cs = struct.unpack(HDR_FMT, data[:HDR_SIZE])
             payload = data[HDR_SIZE:]
 
             # ── CRC validation ─────────────────────────────────────────────────
