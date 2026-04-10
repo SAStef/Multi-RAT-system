@@ -26,15 +26,15 @@ try:
             seq, session_id, ts_ns, path = struct.unpack(HDR_FMT, data[:HDR_SIZE])
             payload = data[HDR_SIZE:]
 
-        now_ns = time.time_ns()
-        latency_ms = (now_ns - ts_ns) / 1_000_000
+            now_ns = time.time_ns()
+            latency_ms = (now_ns - ts_ns) / 1_000_000
 
-        print(
-            f"addr={addr} path={path} seq={seq} "
-            f"session={session_id:#010x} "
-            f"latency={latency_ms:.2f}ms "
-            f"payload={payload.hex()}"
-            )
+            print(
+                f"addr={addr} path={path} seq={seq} "
+                f"session={session_id:#010x} "
+                f"latency={latency_ms:.2f}ms "
+                f"payload={payload.hex()}"
+                , flush=True)
 
 except KeyboardInterrupt:
     print("\nStopped by user")
