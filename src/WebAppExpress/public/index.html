@@ -463,10 +463,28 @@
     const p1 = data.paths?.['1'] || {};
     const p2 = data.paths?.['2'] || {};
     const m  = data.merged       || {};
-    const hasPacketData = p1.latency !== undefined || p2.latency !== undefined || m.latency !== undefined;
+    const rawTotal = (p1.raw_received || 0) + (p2.raw_received || 0);
+    const rawWindow = (p1.raw_window || 0) + (p2.raw_window || 0);
+    const parsedTotal = (p1.received || 0) + (p2.received || 0);
+    const parserDrops = (p1.malformed || 0) + (p2.malformed || 0) + (p1.crc_errors || 0) + (p2.crc_errors || 0) + (p1.unknown_path || 0) + (p2.unknown_path || 0);
+    const hasPacketData = p1.latency != null || p2.latency != null || m.latency != null;
 
     if (!hasPacketData) {
-      if (lastDataTs === 0) {
+      if (rawWindow > 0) {
+        lastDataTs = ts;
+        badge.textContent = '● UDP received, parser mismatch';
+        badge.className = 'badge warning';
+        lastUpdatedEl.textContent = 'Sidste UDP: ' + formatClock(ts);
+        set('pk-total', rawTotal);
+        set('pk-unique', parsedTotal);
+        set('pk-dupes', parserDrops);
+        set('pk-p1', p1.raw_received ?? '—');
+        set('pk-p2', p2.raw_received ?? '—');
+        set('pk-crc', (p1.crc_errors || 0) + (p2.crc_errors || 0));
+        pushDual(pkc.recv, ts, p1.raw_received, p2.raw_received);
+        push(pkc.dupes, ts, parserDrops);
+        push(pkc.unique, ts, parsedTotal);
+      } else if (lastDataTs === 0) {
         badge.textContent = '● Waiting for packets';
         badge.className = 'badge warning';
       }
@@ -480,7 +498,7 @@
 
     totalDupes = (p1.duplicates || 0) + (p2.duplicates || 0);
 
-    if (p1.latency !== undefined) {
+    if (p1.latency != null) {
       set('ov-p1-lat', p1.latency.toFixed(2)+' ms'); set('ov-p1-jit', p1.jitter.toFixed(2)+' ms');
       set('ov-p1-thr', p1.throughput.toFixed(1)+' kbps'); set('ov-p1-loss', p1.loss.toFixed(1)+'%');
       set('ov-p1-pkts', p1.received); set('ov-p1-dupes', p1.duplicates??0); set('ov-p1-crc', p1.crc_errors??0); set('ov-p1-hops', p1.hops??'—');
@@ -488,7 +506,7 @@
       set('p1-thr', p1.throughput.toFixed(1)+' kbps'); set('p1-loss', p1.loss.toFixed(1)+'%');
       set('p1-pkts', p1.received); set('p1-dupes', p1.duplicates??0); set('p1-crc', p1.crc_errors??0); set('p1-hops', p1.hops??'—');
     }
-    if (p2.latency !== undefined) {
+    if (p2.latency != null) {
       set('ov-p2-lat', p2.latency.toFixed(2)+' ms'); set('ov-p2-jit', p2.jitter.toFixed(2)+' ms');
       set('ov-p2-thr', p2.throughput.toFixed(1)+' kbps'); set('ov-p2-loss', p2.loss.toFixed(1)+'%');
       set('ov-p2-pkts', p2.received); set('ov-p2-dupes', p2.duplicates??0); set('ov-p2-crc', p2.crc_errors??0); set('ov-p2-hops', p2.hops??'—');
@@ -496,7 +514,7 @@
       set('p2-thr', p2.throughput.toFixed(1)+' kbps'); set('p2-loss', p2.loss.toFixed(1)+'%');
       set('p2-pkts', p2.received); set('p2-dupes', p2.duplicates??0); set('p2-crc', p2.crc_errors??0); set('p2-hops', p2.hops??'—');
     }
-    if (m.latency !== undefined) {
+    if (m.latency != null) {
       set('ov-m-lat', m.latency.toFixed(2)+' ms'); set('ov-m-jit', m.jitter.toFixed(2)+' ms');
       set('ov-m-thr', m.throughput.toFixed(1)+' kbps'); set('ov-m-loss', m.loss.toFixed(1)+'%');
       set('ov-m-pkts', m.received); set('ov-m-dupes', totalDupes);
@@ -506,17 +524,16 @@
     }
 
     // Packets tab
-    const total = (p1.received || 0) + (p2.received || 0);
     const dupes = (p1.duplicates || 0) + (p2.duplicates || 0);
-    set('pk-total',   total);
+    set('pk-total',   rawTotal);
     set('pk-unique',  m.received ?? '—');
     set('pk-dupes',   dupes);
-    set('pk-p1',      p1.received ?? '—');
-    set('pk-p2',      p2.received ?? '—');
+    set('pk-p1',      p1.raw_received ?? p1.received ?? '—');
+    set('pk-p2',      p2.raw_received ?? p2.received ?? '—');
     set('pk-p1-lost', p1.lost ?? '—');
     set('pk-p2-lost', p2.lost ?? '—');
     set('pk-crc',     (p1.crc_errors || 0) + (p2.crc_errors || 0));
-    pushDual(pkc.recv,  ts, p1.received,  p2.received);
+    pushDual(pkc.recv,  ts, p1.raw_received ?? p1.received,  p2.raw_received ?? p2.received);
     pushDual(pkc.loss,  ts, p1.loss,      p2.loss);
     push(pkc.dupes,  ts, dupes);
     push(pkc.unique, ts, m.received);
