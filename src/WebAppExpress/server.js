@@ -5,17 +5,17 @@
  *   node server.js          (terminal 1 — starts server + receiver)
  *   python3 Sender.py       (terminal 2 — sends packets)
  *
- * Open: http://localhost:3000
+ * Open: http://34.32.45.194:3000
  */
 
-const express    = require('express');
-const http       = require('http');
-const { Server } = require('socket.io');
-const path       = require('path');
-const { spawn }  = require('child_process');
-const os         = require('os');
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const path = require("path");
+const { spawn } = require("child_process");
+const os = require("os");
 
-const app        = express();
+const app = express();
 const httpServer = http.createServer(app);
 const io         = new Server(httpServer);
 const startedAt  = Date.now();
@@ -33,11 +33,11 @@ let receiverState  = {
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, "public")));
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // Metrics endpoint — called by receiver.py every second
@@ -59,7 +59,7 @@ app.get('/health', (_req, res) => {
 });
 
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
-io.on('connection', (socket) => {
+io.on("connection", (socket) => {
   console.log(`[Dashboard] Browser connected  (id=${socket.id})`);
   if (latestMetrics) {
     socket.emit('metrics', latestMetrics);

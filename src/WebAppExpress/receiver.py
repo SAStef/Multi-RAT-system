@@ -1,43 +1,12 @@
-"""
-Multi-RAT Receiver — FRER (IEEE 802.1CB) + HTTP bridge to Express dashboard
+import socket, struct, time, binascii, threading, requests
 
-Thread architecture:
-  - receiver_thread(sock) × 2  — one per UDP socket, handles each path in parallel
-  - aggregator_thread()        — 1-second tick: compute averages, POST to Express
+PORT1 = 6967
+PORT2 = 6968
+HDR_FMT = "!IIQBBHx"
+HDR_SIZE = struct.calcsize(HDR_FMT)
+DASHBOARD_URL = "http://34.32.45.194:3000/metrics"
 
-All shared state protected by metrics_lock.
-stop_event signals clean shutdown on Ctrl-C.
-"""
-
-import socket
-import struct
-import time
-import threading
-import collections
-import binascii
-import json
-import urllib.request
-import platform
-
-# ── Configuration ──────────────────────────────────────────────────────────────
-PORT1        = 6967
-PORT2        = 6968
-HDR_FMT      = "!IIQBBHx"               # seq(I) session(I) ts_ns(Q) path(B) sent_ttl(B) crc16(H) pad(x)
-HDR_SIZE     = struct.calcsize(HDR_FMT)  # 21 bytes
-FRER_WINDOW  = 2000
-EXPRESS_URL  = "http://localhost:3000/metrics"
-
-PATH_LABELS  = {1: "Path 1", 2: "Path 2"}
-
-# ── Platform detection ─────────────────────────────────────────────────────────
-_IS_WINDOWS  = platform.system() == 'Windows'
-_HAS_RECVMSG = hasattr(socket.socket, 'recvmsg') and not _IS_WINDOWS
-_IP_RECVTTL  = getattr(socket, 'IP_RECVTTL', 24)   # macOS = 24
-_IP_TTL      = getattr(socket, 'IP_TTL',     4)    # Linux  = 4
-_TTL_TYPES   = {_IP_RECVTTL, _IP_TTL}
-
-# ── CRC ────────────────────────────────────────────────────────────────────────
-def crc16(data: bytes) -> int:
+def crc(data):
     return binascii.crc_hqx(data, 0xFFFF)
 
 # ── Metrics ────────────────────────────────────────────────────────────────────
@@ -76,27 +45,17 @@ stop_event     = threading.Event()
 _frer_seen: collections.deque = collections.deque(maxlen=FRER_WINDOW)
 _frer_set:  set                = set()
 
-def frer_is_duplicate(session_id: int, seq: int) -> bool:
-    """Return True if this (session_id, seq) was already delivered."""
-    key = (session_id, seq)
-    if key in _frer_set:
-        return True
-    if len(_frer_seen) == FRER_WINDOW:
-        _frer_set.discard(_frer_seen[0])
-    _frer_seen.append(key)
-    _frer_set.add(key)
-    return False
+    while True:
+        data, addr = sock.recvfrom(65535)
+        if len(data) < HDR_SIZE:
+            continue
 
-# ── Per-packet metric update ───────────────────────────────────────────────────
-def _update(m: dict, seq: int, latency_ms: float, payload_size: int, hops=None):
-    m["received"] += 1
-    if m["last_seq"] >= 0 and seq > m["last_seq"] + 1:
-        m["lost"] += seq - m["last_seq"] - 1
-    m["last_seq"] = seq
+        seq, session, ts, path, ttl, cs = struct.unpack(HDR_FMT, data[:HDR_SIZE])
+        payload = data[HDR_SIZE:]
 
-    # Jitter — RFC 3550 absolute difference
-    jitter_ms = abs(latency_ms - m["last_latency"]) if m["last_latency"] is not None else 0.0
-    m["last_latency"] = latency_ms
+        if crc(payload) != cs:
+            print(f"[BAD CRC] port={port}")
+            continue
 
     m["bytes_window"] += payload_size
     m["latency_hist"].append(latency_ms)
@@ -108,8 +67,16 @@ def _update(m: dict, seq: int, latency_ms: float, payload_size: int, hops=None):
 def receiver_thread(sock: socket.socket):
     if _HAS_RECVMSG:
         try:
-            sock.setsockopt(socket.IPPROTO_IP, _IP_RECVTTL, 1)
-        except OSError:
+            requests.post(DASHBOARD_URL, json={
+                "port": port,
+                "path": path,
+                "seq": seq,
+                "latency": round(latency, 2),
+                "from": str(addr),
+                "session": session,
+                "ttl": ttl,
+            }, timeout=0.5)
+        except Exception:
             pass
     else:
         print("[Receiver] recvmsg not available on this platform — hops will show as —")
@@ -253,25 +220,17 @@ def aggregator_thread():
                     f"loss={snap['loss']:5.1f}%"
                 )
 
-        post_to_express(payload)
+s1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# ── Start ──────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    sock1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock1.bind(("0.0.0.0", PORT1))
-    sock2.bind(("0.0.0.0", PORT2))
+s1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    threading.Thread(target=receiver_thread, args=(sock1,), name="rx-path1", daemon=True).start()
-    threading.Thread(target=receiver_thread, args=(sock2,), name="rx-path2", daemon=True).start()
-    threading.Thread(target=aggregator_thread, daemon=True).start()
+s1.bind(("0.0.0.0", PORT1))
+s2.bind(("0.0.0.0", PORT2))
 
-    print("Receiver running — posting metrics to", EXPRESS_URL)
-    print("Press Ctrl-C to stop")
+threading.Thread(target=rx, args=(s1,), daemon=True).start()
+threading.Thread(target=rx, args=(s2,), daemon=True).start()
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        stop_event.set()
-        print("\nStopped")
+while True:
+    time.sleep(1)
