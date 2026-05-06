@@ -17,7 +17,19 @@ const os = require("os");
 
 const app = express();
 const httpServer = http.createServer(app);
-const io = new Server(httpServer);
+const io         = new Server(httpServer);
+const startedAt  = Date.now();
+
+let latestMetrics  = null;
+let latestMetricsAt = null;
+let receiverState  = {
+  running: false,
+  pid: null,
+  restarts: 0,
+  lastExitCode: null,
+  lastStartedAt: null,
+  lastExitedAt: null,
+};
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(express.json());
@@ -29,43 +41,77 @@ app.get("/", (req, res) => {
 });
 
 // Metrics endpoint — called by receiver.py every second
-app.post("/metrics", (req, res) => {
-  io.emit("metrics", req.body);
+app.post('/metrics', (req, res) => {
+  latestMetrics = req.body;
+  latestMetricsAt = Date.now();
+  io.emit('metrics', req.body);
   res.sendStatus(200);
+});
+
+app.get('/health', (_req, res) => {
+  const now = Date.now();
+  res.json({
+    ok: true,
+    uptime_s: Math.round((now - startedAt) / 1000),
+    latest_metrics_age_s: latestMetricsAt ? Math.round((now - latestMetricsAt) / 1000) : null,
+    receiver: receiverState,
+  });
 });
 
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log(`[Dashboard] Browser connected  (id=${socket.id})`);
-  socket.on("disconnect", () => {
+  if (latestMetrics) {
+    socket.emit('metrics', latestMetrics);
+  }
+  socket.on('disconnect', () => {
     console.log(`[Dashboard] Browser disconnected (id=${socket.id})`);
   });
 });
 
 // ── Start receiver.py as a subprocess ────────────────────────────────────────
-const PORT = 3000;
-httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Dashboard    → http://34.32.45.194:${PORT}`);
+const PORT = Number(process.env.PORT || 3000);
+httpServer.listen(PORT, () => {
+  console.log(`Dashboard    → http://localhost:${PORT}`);
 
-  // Use 'python' on Windows, 'python3' on macOS/Linux
-  const python = os.platform() === "win32" ? "python" : "python3";
-  const receiverPath = path.join(__dirname, "receiver.py");
+  const python       = os.platform() === 'win32' ? 'python' : 'python3';
+  const receiverPath = path.join(__dirname, 'receiver.py');
+  let   currentReceiver = null;
+  let   shuttingDown    = false;
 
-  const receiver = spawn(python, [receiverPath], { stdio: "inherit" });
+  function spawnReceiver() {
+    if (shuttingDown) return;
+    currentReceiver = spawn(python, [receiverPath], { stdio: 'inherit' });
+    receiverState = {
+      ...receiverState,
+      running: true,
+      pid: currentReceiver.pid,
+      restarts: receiverState.restarts + 1,
+      lastStartedAt: new Date().toISOString(),
+    };
+    console.log(`[Receiver]   Started (${python} receiver.py)`);
 
-  receiver.on("error", (err) => {
-    console.error(`[Receiver] Failed to start: ${err.message}`);
-  });
+    currentReceiver.on('error', (err) => {
+      receiverState = { ...receiverState, running: false, pid: null };
+      console.error(`[Receiver] Failed to start: ${err.message}`);
+    });
 
-  receiver.on("close", (code) => {
-    if (code !== 0) console.log(`[Receiver] Exited with code ${code}`);
-  });
+    currentReceiver.on('close', (code) => {
+      receiverState = {
+        ...receiverState,
+        running: false,
+        pid: null,
+        lastExitCode: code,
+        lastExitedAt: new Date().toISOString(),
+      };
+      if (shuttingDown) return;
+      console.log(`[Receiver] Exited with code ${code} — restarting in 3s`);
+      setTimeout(spawnReceiver, 3000);
+    });
+  }
 
-  // Kill receiver when server shuts down
-  process.on("SIGINT", () => {
-    receiver.kill();
-    process.exit();
-  });
+  spawnReceiver();
 
-  console.log(`[Receiver]   Started (${python} receiver.py)`);
+  process.on('SIGINT',  () => { shuttingDown = true; currentReceiver?.kill(); process.exit(); });
+  process.on('SIGTERM', () => { shuttingDown = true; currentReceiver?.kill(); process.exit(); });
 });
