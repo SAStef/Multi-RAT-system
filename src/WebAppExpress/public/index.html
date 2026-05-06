@@ -32,6 +32,8 @@
     header h1 { font-size: 0.95rem; font-weight: 600; color: #fff; }
     .badge { font-size: 0.72rem; padding: 3px 10px; border-radius: 99px; font-weight: 600; background: #2a2d3a; color: #888; }
     .badge.connected { background: #1b3a28; color: #50C878; }
+    .badge.warning   { background: #3a2f00; color: #f0b429; }
+    .badge.stale     { background: #3a1a1a; color: #e05555; }
 
     .tabs {
       display: flex;
@@ -107,6 +109,7 @@
 
 <header>
   <h1>Multi-RAT &mdash; FRER Live Dashboard</h1>
+  <span id="last-updated" style="font-size:0.72rem;color:#555;">—</span>
   <span class="badge" id="conn-badge">● Disconnected</span>
 </header>
 
@@ -275,7 +278,7 @@
   document.getElementById('hdr-p1').textContent  = IF_NAME[1];
   document.getElementById('hdr-p2').textContent  = IF_NAME[2];
 
-  const MAX = 60;
+  const WINDOW_MS = 5 * 60 * 1000;  // Sliding chart window: last 5 minutes
 
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -286,21 +289,65 @@
     });
   });
 
+  function formatClock(ts) {
+    return new Date(ts).toLocaleTimeString('da-DK', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  }
+
+  function timeScale() {
+    const now = Date.now();
+    return {
+      type: 'linear',
+      min: now - WINDOW_MS,
+      max: now,
+      ticks: {
+        color: '#999',
+        maxTicksLimit: 6,
+        font: { size: 9 },
+        callback: value => formatClock(value),
+      },
+      grid: { color: '#e8e8e8' },
+    };
+  }
+
+  function pruneDataset(dataset, now) {
+    const cutoff = now - WINDOW_MS;
+    while (dataset.data.length && dataset.data[0].x < cutoff) {
+      dataset.data.shift();
+    }
+  }
+
+  function moveWindow(chart, now) {
+    chart.options.scales.x.min = now - WINDOW_MS;
+    chart.options.scales.x.max = now;
+    chart.data.datasets.forEach(dataset => pruneDataset(dataset, now));
+  }
+
   function makeChart(id) {
     return new Chart(document.getElementById(id), {
       type: 'line',
       data: {
-        labels: [],
         datasets: [{ data: [], borderColor: '#111111', backgroundColor: 'rgba(0,0,0,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true }],
       },
       options: {
         animation: false, responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
-          tooltip: { backgroundColor: '#fff', borderColor: '#ccc', borderWidth: 1, titleColor: '#333', bodyColor: '#555' },
+          tooltip: {
+            backgroundColor: '#fff',
+            borderColor: '#ccc',
+            borderWidth: 1,
+            titleColor: '#333',
+            bodyColor: '#555',
+            callbacks: { title: items => items[0] ? formatClock(items[0].parsed.x) : '' },
+          },
         },
         scales: {
-          x: { ticks: { color: '#999', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#e8e8e8' } },
+          x: timeScale(),
           y: { beginAtZero: true, ticks: { color: '#999', font: { size: 9 } }, grid: { color: '#e8e8e8' } },
         },
       },
@@ -312,7 +359,6 @@
     return new Chart(document.getElementById(id), {
       type: 'line',
       data: {
-        labels: [],
         datasets: [
           { label: label1, data: [], borderColor: color1, backgroundColor: 'rgba(0,0,0,0)', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
           { label: label2, data: [], borderColor: color2, backgroundColor: 'rgba(0,0,0,0)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, borderDash: [4,3] },
@@ -322,25 +368,27 @@
         animation: false, responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { display: true, labels: { color: '#333', font: { size: 9 } } },
-          tooltip: { backgroundColor: '#fff', borderColor: '#ccc', borderWidth: 1, titleColor: '#333', bodyColor: '#555' },
+          tooltip: {
+            backgroundColor: '#fff',
+            borderColor: '#ccc',
+            borderWidth: 1,
+            titleColor: '#333',
+            bodyColor: '#555',
+            callbacks: { title: items => items[0] ? formatClock(items[0].parsed.x) : '' },
+          },
         },
         scales: {
-          x: { ticks: { color: '#999', maxTicksLimit: 6, font: { size: 9 } }, grid: { color: '#e8e8e8' } },
+          x: timeScale(),
           y: { beginAtZero: true, ticks: { color: '#999', font: { size: 9 } }, grid: { color: '#e8e8e8' } },
         },
       },
     });
   }
 
-  function pushDual(chart, label, val1, val2) {
-    chart.data.labels.push(label);
-    chart.data.datasets[0].data.push(val1 ?? null);
-    chart.data.datasets[1].data.push(val2 ?? null);
-    if (chart.data.labels.length > MAX) {
-      chart.data.labels.shift();
-      chart.data.datasets[0].data.shift();
-      chart.data.datasets[1].data.shift();
-    }
+  function pushDual(chart, ts, val1, val2) {
+    chart.data.datasets[0].data.push({ x: ts, y: val1 ?? null });
+    chart.data.datasets[1].data.push({ x: ts, y: val2 ?? null });
+    moveWindow(chart, ts);
     chart.update('none');
   }
 
@@ -358,27 +406,77 @@
   const p2c  = { lat: makeChart('p2-c-lat'),    jit: makeChart('p2-c-jit'),    thr: makeChart('p2-c-thr'),    loss: makeChart('p2-c-loss')    };
   const mc   = { lat: makeChart('m-c-lat'),     jit: makeChart('m-c-jit'),     thr: makeChart('m-c-thr'),     loss: makeChart('m-c-loss')     };
 
-  function push(chart, label, val) {
-    chart.data.labels.push(label);
-    chart.data.datasets[0].data.push(val ?? null);
-    if (chart.data.labels.length > MAX) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+  const allCharts = [
+    ...Object.values(pkc),
+    ...Object.values(ovP1),
+    ...Object.values(ovP2),
+    ...Object.values(ovM),
+    ...Object.values(p1c),
+    ...Object.values(p2c),
+    ...Object.values(mc),
+  ];
+
+  function push(chart, ts, val) {
+    chart.data.datasets[0].data.push({ x: ts, y: val ?? null });
+    moveWindow(chart, ts);
     chart.update('none');
+  }
+
+  function refreshChartWindows() {
+    const now = Date.now();
+    allCharts.forEach(chart => {
+      moveWindow(chart, now);
+      chart.update('none');
+    });
   }
 
   function set(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
 
   const socket = io();
   const badge  = document.getElementById('conn-badge');
+  const lastUpdatedEl = document.getElementById('last-updated');
   socket.on('connect',    () => { badge.textContent = '● Connected';    badge.className = 'badge connected'; });
-  socket.on('disconnect', () => { badge.textContent = '● Disconnected'; badge.className = 'badge'; });
+  socket.on('disconnect', () => { badge.textContent = '● Disconnected'; badge.className = 'badge'; lastUpdatedEl.textContent = '—'; });
 
   let totalDupes = 0;
+  let lastDataTs = 0;
+
+  setInterval(() => {
+    refreshChartWindows();
+    if (!socket.connected || lastDataTs === 0) return;
+    const age = Date.now() - lastDataTs;
+    if (age > 10000) {
+      badge.textContent = '● No data (>10s)';
+      badge.className = 'badge stale';
+    } else if (age > 5000) {
+      badge.textContent = '● No data (>5s)';
+      badge.className = 'badge warning';
+    } else {
+      badge.textContent = '● Live';
+      badge.className = 'badge connected';
+    }
+  }, 1000);
 
   socket.on('metrics', (data) => {
-    const label = data.time + 's';
+    const now = new Date();
+    const ts = now.getTime();
     const p1 = data.paths?.['1'] || {};
     const p2 = data.paths?.['2'] || {};
     const m  = data.merged       || {};
+    const hasPacketData = p1.latency !== undefined || p2.latency !== undefined || m.latency !== undefined;
+
+    if (!hasPacketData) {
+      if (lastDataTs === 0) {
+        badge.textContent = '● Waiting for packets';
+        badge.className = 'badge warning';
+      }
+      return;
+    }
+
+    lastDataTs = ts;
+    badge.textContent = '● Live';
+    badge.className = 'badge connected';
+    lastUpdatedEl.textContent = 'Sidste pakke: ' + formatClock(ts);
 
     totalDupes = (p1.duplicates || 0) + (p2.duplicates || 0);
 
@@ -418,17 +516,17 @@
     set('pk-p1-lost', p1.lost ?? '—');
     set('pk-p2-lost', p2.lost ?? '—');
     set('pk-crc',     (p1.crc_errors || 0) + (p2.crc_errors || 0));
-    pushDual(pkc.recv,  label, p1.received,  p2.received);
-    pushDual(pkc.loss,  label, p1.loss,      p2.loss);
-    push(pkc.dupes,  label, dupes);
-    push(pkc.unique, label, m.received);
+    pushDual(pkc.recv,  ts, p1.received,  p2.received);
+    pushDual(pkc.loss,  ts, p1.loss,      p2.loss);
+    push(pkc.dupes,  ts, dupes);
+    push(pkc.unique, ts, m.received);
 
-    push(ovP1.lat, label, p1.latency);  push(ovP1.jit, label, p1.jitter);  push(ovP1.thr, label, p1.throughput); push(ovP1.loss, label, p1.loss);
-    push(ovP2.lat, label, p2.latency);  push(ovP2.jit, label, p2.jitter);  push(ovP2.thr, label, p2.throughput); push(ovP2.loss, label, p2.loss);
-    push(ovM.lat,  label, m.latency);   push(ovM.jit,  label, m.jitter);   push(ovM.thr,  label, m.throughput);  push(ovM.loss,  label, m.loss);
-    push(p1c.lat,  label, p1.latency);  push(p1c.jit,  label, p1.jitter);  push(p1c.thr,  label, p1.throughput); push(p1c.loss,  label, p1.loss);
-    push(p2c.lat,  label, p2.latency);  push(p2c.jit,  label, p2.jitter);  push(p2c.thr,  label, p2.throughput); push(p2c.loss,  label, p2.loss);
-    push(mc.lat,   label, m.latency);   push(mc.jit,   label, m.jitter);   push(mc.thr,   label, m.throughput);  push(mc.loss,   label, m.loss);
+    push(ovP1.lat, ts, p1.latency);  push(ovP1.jit, ts, p1.jitter);  push(ovP1.thr, ts, p1.throughput); push(ovP1.loss, ts, p1.loss);
+    push(ovP2.lat, ts, p2.latency);  push(ovP2.jit, ts, p2.jitter);  push(ovP2.thr, ts, p2.throughput); push(ovP2.loss, ts, p2.loss);
+    push(ovM.lat,  ts, m.latency);   push(ovM.jit,  ts, m.jitter);   push(ovM.thr,  ts, m.throughput);  push(ovM.loss,  ts, m.loss);
+    push(p1c.lat,  ts, p1.latency);  push(p1c.jit,  ts, p1.jitter);  push(p1c.thr,  ts, p1.throughput); push(p1c.loss,  ts, p1.loss);
+    push(p2c.lat,  ts, p2.latency);  push(p2c.jit,  ts, p2.jitter);  push(p2c.thr,  ts, p2.throughput); push(p2c.loss,  ts, p2.loss);
+    push(mc.lat,   ts, m.latency);   push(mc.jit,   ts, m.jitter);   push(mc.thr,   ts, m.throughput);  push(mc.loss,   ts, m.loss);
   });
 </script>
 </body>

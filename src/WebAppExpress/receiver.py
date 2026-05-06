@@ -49,11 +49,9 @@ def new_path_metrics() -> dict:
         "crc_errors":      0,
         "last_seq":        -1,
         "last_latency":    None,
-        "bytes":           0,
-        "start_time":      None,
+        "bytes_window":    0,
         "latency_hist":    collections.deque(maxlen=500),
         "jitter_hist":     collections.deque(maxlen=500),
-        "throughput_hist": collections.deque(maxlen=500),
         "hops_hist":       collections.deque(maxlen=500),
     }
 
@@ -63,11 +61,9 @@ def new_merged_metrics() -> dict:
         "lost":            0,
         "last_seq":        -1,
         "last_latency":    None,
-        "bytes":           0,
-        "start_time":      None,
+        "bytes_window":    0,
         "latency_hist":    collections.deque(maxlen=500),
         "jitter_hist":     collections.deque(maxlen=500),
-        "throughput_hist": collections.deque(maxlen=500),
     }
 
 metrics        = {1: new_path_metrics(), 2: new_path_metrics()}
@@ -102,17 +98,9 @@ def _update(m: dict, seq: int, latency_ms: float, payload_size: int, hops=None):
     jitter_ms = abs(latency_ms - m["last_latency"]) if m["last_latency"] is not None else 0.0
     m["last_latency"] = latency_ms
 
-    # Throughput (cumulative bytes → kbps)
-    m["bytes"] += payload_size
-    now = time.perf_counter()
-    if m["start_time"] is None:
-        m["start_time"] = now
-    elapsed = now - m["start_time"]
-    throughput_kbps = (m["bytes"] * 8 / 1000) / elapsed if elapsed > 0 else 0.0
-
+    m["bytes_window"] += payload_size
     m["latency_hist"].append(latency_ms)
     m["jitter_hist"].append(jitter_ms)
-    m["throughput_hist"].append(throughput_kbps)
     if hops is not None and "hops_hist" in m:
         m["hops_hist"].append(hops)
 
@@ -192,7 +180,7 @@ def _snapshot(m: dict):
 
     avg_lat = sum(m["latency_hist"]) / len(m["latency_hist"])
     avg_jit = sum(m["jitter_hist"])  / len(m["jitter_hist"])
-    avg_thr = sum(m["throughput_hist"]) / len(m["throughput_hist"])
+    throughput_kbps = m["bytes_window"] * 8 / 1000  # bytes in last 1s → kbps
     total   = m["received"] + m["lost"]
     loss    = m["lost"] / total * 100 if total else 0.0
 
@@ -203,16 +191,16 @@ def _snapshot(m: dict):
     result = {
         "latency":    round(avg_lat, 2),
         "jitter":     round(avg_jit, 2),
-        "throughput": round(avg_thr, 2),
+        "throughput": round(throughput_kbps, 2),
         "loss":       round(loss, 2),
         "received":   m["received"],
         "lost":       m["lost"],
         "hops":       hops_val,
     }
 
+    m["bytes_window"] = 0
     m["latency_hist"].clear()
     m["jitter_hist"].clear()
-    m["throughput_hist"].clear()
     if "hops_hist" in m:
         m["hops_hist"].clear()
 
