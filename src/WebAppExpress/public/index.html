@@ -1,550 +1,1058 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Multi-RAT Dashboard</title>
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      background: #0f1117;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    header {
-      background: #1a1d27;
-      border-bottom: 1px solid #2a2d3a;
-      padding: 0 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-shrink: 0;
-      height: 48px;
-    }
-    header h1 { font-size: 0.95rem; font-weight: 600; color: #fff; }
-    .badge { font-size: 0.72rem; padding: 3px 10px; border-radius: 99px; font-weight: 600; background: #2a2d3a; color: #888; }
-    .badge.connected { background: #1b3a28; color: #50C878; }
-    .badge.warning   { background: #3a2f00; color: #f0b429; }
-    .badge.stale     { background: #3a1a1a; color: #e05555; }
-
-    .tabs {
-      display: flex;
-      background: #13151f;
-      border-bottom: 1px solid #2a2d3a;
-      flex-shrink: 0;
-    }
-    .tab {
-      padding: 10px 28px;
-      font-size: 0.82rem; font-weight: 600; color: #666;
-      cursor: pointer; border-bottom: 2px solid transparent;
-      transition: all 0.15s;
-    }
-    .tab:hover { color: #aaa; }
-    .tab.active.t-overview,
-    .tab.active.t-path1,
-    .tab.active.t-path2,
-    .tab.active.t-merged,
-    .tab.active.t-packets  { color: #fff; border-color: #fff; }
-
-    .panel { display: none; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; }
-    .panel.active { display: flex; }
-
-    .stat-bar {
-      background: #13151f;
-      border-bottom: 1px solid #2a2d3a;
-      padding: 10px 24px;
-      display: flex; gap: 10px; flex-wrap: wrap; flex-shrink: 0;
-    }
-    .stat-card {
-      background: #ffffff; border: 1px solid #ddd;
-      border-radius: 8px; padding: 8px 16px; min-width: 110px;
-    }
-    .stat-card .lbl { font-size: 0.65rem; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }
-    .stat-card .val { font-size: 1.2rem; font-weight: 700; margin-top: 2px; }
-    .c1 .val { color: #111; }
-    .c2 .val { color: #111; }
-    .cm .val { color: #111; }
-    .cw .val { color: #111; }
-
-    .path-section { padding: 14px 16px 0; flex-shrink: 0; }
-    .path-section-header {
-      font-size: 0.78rem; font-weight: 700; letter-spacing: 1px;
-      text-transform: uppercase; margin-bottom: 10px;
-      padding-left: 8px; border-left: 3px solid;
-    }
-    .s1 { color: #fff; border-color: #fff; }
-    .s2 { color: #fff; border-color: #fff; }
-    .sm { color: #fff; border-color: #fff; }
-
-    .mini-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-    .mini-stats .stat-card { background: #ffffff; border: 1px solid #ddd; }
-
-    .charts-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      padding: 0 16px 16px;
-    }
-    .charts-grid.padded { padding: 12px 16px 16px; }
-    .chart-card {
-      background: #ffffff;
-      border: 1px solid #2a2d3a;
-      border-radius: 10px; padding: 12px 16px;
-      display: flex; flex-direction: column; height: 200px;
-    }
-    .chart-card h3 { font-size: 0.78rem; color: #333; font-weight: 500; margin-bottom: 8px; flex-shrink: 0; }
-    .chart-card canvas { flex: 1; min-height: 0; }
-    .divider { height: 1px; background: #2a2d3a; margin: 4px 16px 0; flex-shrink: 0; }
-  </style>
-</head>
-<body>
-
-<header>
-  <h1>Multi-RAT &mdash; FRER Live Dashboard</h1>
-  <span id="last-updated" style="font-size:0.72rem;color:#555;">—</span>
-  <span class="badge" id="conn-badge">● Disconnected</span>
-</header>
-
-<div class="tabs">
-  <div class="tab t-overview active" data-panel="panel-overview">Overview</div>
-  <div class="tab t-path1"          data-panel="panel-path1" id="tab-p1">Path 1</div>
-  <div class="tab t-path2"          data-panel="panel-path2" id="tab-p2">Path 2</div>
-  <div class="tab t-merged"         data-panel="panel-merged">Merged</div>
-  <div class="tab t-packets"        data-panel="panel-packets">Packets</div>
-</div>
-
-<!-- ══ OVERVIEW ══ -->
-<div class="panel active" id="panel-overview">
-
-  <div class="path-section">
-    <div class="path-section-header s1" id="hdr-p1">Path 1</div>
-    <div class="mini-stats">
-      <div class="stat-card c1"><div class="lbl">Latency</div><div class="val" id="ov-p1-lat">—</div></div>
-      <div class="stat-card c1"><div class="lbl">Jitter</div><div class="val" id="ov-p1-jit">—</div></div>
-      <div class="stat-card c1"><div class="lbl">Throughput</div><div class="val" id="ov-p1-thr">—</div></div>
-      <div class="stat-card c1"><div class="lbl">Loss</div><div class="val" id="ov-p1-loss">—</div></div>
-      <div class="stat-card c1"><div class="lbl">Packets</div><div class="val" id="ov-p1-pkts">—</div></div>
-      <div class="stat-card c1"><div class="lbl">Duplicates</div><div class="val" id="ov-p1-dupes">—</div></div>
-      <div class="stat-card c1"><div class="lbl">CRC Errors</div><div class="val" id="ov-p1-crc">—</div></div>
-      <div class="stat-card c1"><div class="lbl">Hops</div><div class="val" id="ov-p1-hops">—</div></div>
-    </div>
-  </div>
-  <div class="charts-grid">
-    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="ov-p1-c-lat"></canvas></div>
-    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="ov-p1-c-jit"></canvas></div>
-    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="ov-p1-c-thr"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="ov-p1-c-loss"></canvas></div>
-  </div>
-
-  <div class="divider"></div>
-
-  <div class="path-section">
-    <div class="path-section-header s2" id="hdr-p2">Path 2</div>
-    <div class="mini-stats">
-      <div class="stat-card c2"><div class="lbl">Latency</div><div class="val" id="ov-p2-lat">—</div></div>
-      <div class="stat-card c2"><div class="lbl">Jitter</div><div class="val" id="ov-p2-jit">—</div></div>
-      <div class="stat-card c2"><div class="lbl">Throughput</div><div class="val" id="ov-p2-thr">—</div></div>
-      <div class="stat-card c2"><div class="lbl">Loss</div><div class="val" id="ov-p2-loss">—</div></div>
-      <div class="stat-card c2"><div class="lbl">Packets</div><div class="val" id="ov-p2-pkts">—</div></div>
-      <div class="stat-card c2"><div class="lbl">Duplicates</div><div class="val" id="ov-p2-dupes">—</div></div>
-      <div class="stat-card c2"><div class="lbl">CRC Errors</div><div class="val" id="ov-p2-crc">—</div></div>
-      <div class="stat-card c2"><div class="lbl">Hops</div><div class="val" id="ov-p2-hops">—</div></div>
-    </div>
-  </div>
-  <div class="charts-grid">
-    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="ov-p2-c-lat"></canvas></div>
-    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="ov-p2-c-jit"></canvas></div>
-    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="ov-p2-c-thr"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="ov-p2-c-loss"></canvas></div>
-  </div>
-
-  <div class="divider"></div>
-
-  <div class="path-section">
-    <div class="path-section-header sm">Merged (FRER)</div>
-    <div class="mini-stats">
-      <div class="stat-card cm"><div class="lbl">Latency</div><div class="val" id="ov-m-lat">—</div></div>
-      <div class="stat-card cm"><div class="lbl">Jitter</div><div class="val" id="ov-m-jit">—</div></div>
-      <div class="stat-card cm"><div class="lbl">Throughput</div><div class="val" id="ov-m-thr">—</div></div>
-      <div class="stat-card cm"><div class="lbl">Loss</div><div class="val" id="ov-m-loss">—</div></div>
-      <div class="stat-card cm"><div class="lbl">Packets</div><div class="val" id="ov-m-pkts">—</div></div>
-      <div class="stat-card cw"><div class="lbl">Dupes elim.</div><div class="val" id="ov-m-dupes">—</div></div>
-    </div>
-  </div>
-  <div class="charts-grid">
-    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="ov-m-c-lat"></canvas></div>
-    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="ov-m-c-jit"></canvas></div>
-    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="ov-m-c-thr"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="ov-m-c-loss"></canvas></div>
-  </div>
-</div>
-
-<!-- ══ PATH 1 ══ -->
-<div class="panel" id="panel-path1">
-  <div class="stat-bar">
-    <div class="stat-card c1"><div class="lbl">Latency</div><div class="val" id="p1-lat">—</div></div>
-    <div class="stat-card c1"><div class="lbl">Jitter</div><div class="val" id="p1-jit">—</div></div>
-    <div class="stat-card c1"><div class="lbl">Throughput</div><div class="val" id="p1-thr">—</div></div>
-    <div class="stat-card c1"><div class="lbl">Loss</div><div class="val" id="p1-loss">—</div></div>
-    <div class="stat-card c1"><div class="lbl">Packets</div><div class="val" id="p1-pkts">—</div></div>
-    <div class="stat-card c1"><div class="lbl">Duplicates</div><div class="val" id="p1-dupes">—</div></div>
-    <div class="stat-card c1"><div class="lbl">CRC Errors</div><div class="val" id="p1-crc">—</div></div>
-    <div class="stat-card c1"><div class="lbl">Hops</div><div class="val" id="p1-hops">—</div></div>
-  </div>
-  <div class="charts-grid padded">
-    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="p1-c-lat"></canvas></div>
-    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="p1-c-jit"></canvas></div>
-    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="p1-c-thr"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="p1-c-loss"></canvas></div>
-  </div>
-</div>
-
-<!-- ══ PATH 2 ══ -->
-<div class="panel" id="panel-path2">
-  <div class="stat-bar">
-    <div class="stat-card c2"><div class="lbl">Latency</div><div class="val" id="p2-lat">—</div></div>
-    <div class="stat-card c2"><div class="lbl">Jitter</div><div class="val" id="p2-jit">—</div></div>
-    <div class="stat-card c2"><div class="lbl">Throughput</div><div class="val" id="p2-thr">—</div></div>
-    <div class="stat-card c2"><div class="lbl">Loss</div><div class="val" id="p2-loss">—</div></div>
-    <div class="stat-card c2"><div class="lbl">Packets</div><div class="val" id="p2-pkts">—</div></div>
-    <div class="stat-card c2"><div class="lbl">Duplicates</div><div class="val" id="p2-dupes">—</div></div>
-    <div class="stat-card c2"><div class="lbl">CRC Errors</div><div class="val" id="p2-crc">—</div></div>
-    <div class="stat-card c2"><div class="lbl">Hops</div><div class="val" id="p2-hops">—</div></div>
-  </div>
-  <div class="charts-grid padded">
-    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="p2-c-lat"></canvas></div>
-    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="p2-c-jit"></canvas></div>
-    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="p2-c-thr"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="p2-c-loss"></canvas></div>
-  </div>
-</div>
-
-<!-- ══ MERGED ══ -->
-<div class="panel" id="panel-merged">
-  <div class="stat-bar">
-    <div class="stat-card cm"><div class="lbl">Latency</div><div class="val" id="m-lat">—</div></div>
-    <div class="stat-card cm"><div class="lbl">Jitter</div><div class="val" id="m-jit">—</div></div>
-    <div class="stat-card cm"><div class="lbl">Throughput</div><div class="val" id="m-thr">—</div></div>
-    <div class="stat-card cm"><div class="lbl">Loss</div><div class="val" id="m-loss">—</div></div>
-    <div class="stat-card cm"><div class="lbl">Packets</div><div class="val" id="m-pkts">—</div></div>
-    <div class="stat-card cw"><div class="lbl">Dupes eliminated</div><div class="val" id="m-dupes">—</div></div>
-  </div>
-  <div class="charts-grid padded">
-    <div class="chart-card"><h3>Latency (ms)</h3><canvas id="m-c-lat"></canvas></div>
-    <div class="chart-card"><h3>Jitter (ms)</h3><canvas id="m-c-jit"></canvas></div>
-    <div class="chart-card"><h3>Throughput (kbps)</h3><canvas id="m-c-thr"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss (%)</h3><canvas id="m-c-loss"></canvas></div>
-  </div>
-</div>
-
-<!-- ══ PACKETS ══ -->
-<div class="panel" id="panel-packets">
-  <div class="stat-bar">
-    <div class="stat-card cw"><div class="lbl">Total Received</div><div class="val" id="pk-total">—</div></div>
-    <div class="stat-card cw"><div class="lbl">Unique (Merged)</div><div class="val" id="pk-unique">—</div></div>
-    <div class="stat-card cw"><div class="lbl">Duplicates Dropped</div><div class="val" id="pk-dupes">—</div></div>
-    <div class="stat-card cw"><div class="lbl">Path 1 Packets</div><div class="val" id="pk-p1">—</div></div>
-    <div class="stat-card cw"><div class="lbl">5G/LTE Packets</div><div class="val" id="pk-p2">—</div></div>
-    <div class="stat-card cw"><div class="lbl">Path 1 Lost</div><div class="val" id="pk-p1-lost">—</div></div>
-    <div class="stat-card cw"><div class="lbl">5G/LTE Lost</div><div class="val" id="pk-p2-lost">—</div></div>
-    <div class="stat-card cw"><div class="lbl">CRC Errors</div><div class="val" id="pk-crc">—</div></div>
-  </div>
-  <div class="charts-grid padded">
-    <div class="chart-card"><h3>Total Received per path</h3><canvas id="pk-c-recv"></canvas></div>
-    <div class="chart-card"><h3>Duplicates Dropped</h3><canvas id="pk-c-dupes"></canvas></div>
-    <div class="chart-card"><h3>Packet Loss — Path 1 vs Path 2 (%)</h3><canvas id="pk-c-loss"></canvas></div>
-    <div class="chart-card"><h3>Unique Delivered (Merged)</h3><canvas id="pk-c-unique"></canvas></div>
-  </div>
-</div>
-
-<script>
-  // ── Interface names — change these to match your radio interfaces ──────────
-  const IF_NAME = {
-    1: 'WiFi',   // e.g. 'WiFi', 'LoRaWAN', '5G', 'LTE'
-    2: '5G/LTE', // e.g. 'WiFi', 'LoRaWAN', '5G', 'LTE'
-  };
-  // ──────────────────────────────────────────────────────────────────────────
-
-  document.getElementById('tab-p1').textContent  = IF_NAME[1];
-  document.getElementById('tab-p2').textContent  = IF_NAME[2];
-  document.getElementById('hdr-p1').textContent  = IF_NAME[1];
-  document.getElementById('hdr-p2').textContent  = IF_NAME[2];
-
-  const WINDOW_MS = 5 * 60 * 1000;  // Sliding chart window: last 5 minutes
-
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById(tab.dataset.panel).classList.add('active');
-    });
-  });
-
-  function formatClock(ts) {
-    return new Date(ts).toLocaleTimeString('da-DK', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-  }
-
-  function timeScale() {
-    const now = Date.now();
-    return {
-      type: 'linear',
-      min: now - WINDOW_MS,
-      max: now,
-      ticks: {
-        color: '#999',
-        maxTicksLimit: 6,
-        font: { size: 9 },
-        callback: value => formatClock(value),
-      },
-      grid: { color: '#e8e8e8' },
-    };
-  }
-
-  function pruneDataset(dataset, now) {
-    const cutoff = now - WINDOW_MS;
-    while (dataset.data.length && dataset.data[0].x < cutoff) {
-      dataset.data.shift();
-    }
-  }
-
-  function moveWindow(chart, now) {
-    chart.options.scales.x.min = now - WINDOW_MS;
-    chart.options.scales.x.max = now;
-    chart.data.datasets.forEach(dataset => pruneDataset(dataset, now));
-  }
-
-  function makeChart(id) {
-    return new Chart(document.getElementById(id), {
-      type: 'line',
-      data: {
-        datasets: [{ data: [], borderColor: '#111111', backgroundColor: 'rgba(0,0,0,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true }],
-      },
-      options: {
-        animation: false, responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#fff',
-            borderColor: '#ccc',
-            borderWidth: 1,
-            titleColor: '#333',
-            bodyColor: '#555',
-            callbacks: { title: items => items[0] ? formatClock(items[0].parsed.x) : '' },
-          },
-        },
-        scales: {
-          x: timeScale(),
-          y: { beginAtZero: true, ticks: { color: '#999', font: { size: 9 } }, grid: { color: '#e8e8e8' } },
-        },
-      },
-    });
-  }
-
-  // Packet tab — dual-dataset chart (Path 1 + Path 2)
-  function makeDualChart(id, label1, color1, label2, color2) {
-    return new Chart(document.getElementById(id), {
-      type: 'line',
-      data: {
-        datasets: [
-          { label: label1, data: [], borderColor: color1, backgroundColor: 'rgba(0,0,0,0)', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
-          { label: label2, data: [], borderColor: color2, backgroundColor: 'rgba(0,0,0,0)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, borderDash: [4,3] },
-        ],
-      },
-      options: {
-        animation: false, responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: true, labels: { color: '#333', font: { size: 9 } } },
-          tooltip: {
-            backgroundColor: '#fff',
-            borderColor: '#ccc',
-            borderWidth: 1,
-            titleColor: '#333',
-            bodyColor: '#555',
-            callbacks: { title: items => items[0] ? formatClock(items[0].parsed.x) : '' },
-          },
-        },
-        scales: {
-          x: timeScale(),
-          y: { beginAtZero: true, ticks: { color: '#999', font: { size: 9 } }, grid: { color: '#e8e8e8' } },
-        },
-      },
-    });
-  }
-
-  function pushDual(chart, ts, val1, val2) {
-    chart.data.datasets[0].data.push({ x: ts, y: val1 ?? null });
-    chart.data.datasets[1].data.push({ x: ts, y: val2 ?? null });
-    moveWindow(chart, ts);
-    chart.update('none');
-  }
-
-  const pkc = {
-    recv:   makeDualChart('pk-c-recv',   IF_NAME[1], '#333', IF_NAME[2], '#999'),
-    dupes:  makeChart('pk-c-dupes'),
-    loss:   makeDualChart('pk-c-loss',   IF_NAME[1], '#333', IF_NAME[2], '#999'),
-    unique: makeChart('pk-c-unique'),
-  };
-
-  const ovP1 = { lat: makeChart('ov-p1-c-lat'), jit: makeChart('ov-p1-c-jit'), thr: makeChart('ov-p1-c-thr'), loss: makeChart('ov-p1-c-loss') };
-  const ovP2 = { lat: makeChart('ov-p2-c-lat'), jit: makeChart('ov-p2-c-jit'), thr: makeChart('ov-p2-c-thr'), loss: makeChart('ov-p2-c-loss') };
-  const ovM  = { lat: makeChart('ov-m-c-lat'),  jit: makeChart('ov-m-c-jit'),  thr: makeChart('ov-m-c-thr'),  loss: makeChart('ov-m-c-loss')  };
-  const p1c  = { lat: makeChart('p1-c-lat'),    jit: makeChart('p1-c-jit'),    thr: makeChart('p1-c-thr'),    loss: makeChart('p1-c-loss')    };
-  const p2c  = { lat: makeChart('p2-c-lat'),    jit: makeChart('p2-c-jit'),    thr: makeChart('p2-c-thr'),    loss: makeChart('p2-c-loss')    };
-  const mc   = { lat: makeChart('m-c-lat'),     jit: makeChart('m-c-jit'),     thr: makeChart('m-c-thr'),     loss: makeChart('m-c-loss')     };
-
-  const allCharts = [
-    ...Object.values(pkc),
-    ...Object.values(ovP1),
-    ...Object.values(ovP2),
-    ...Object.values(ovM),
-    ...Object.values(p1c),
-    ...Object.values(p2c),
-    ...Object.values(mc),
-  ];
-
-  function push(chart, ts, val) {
-    chart.data.datasets[0].data.push({ x: ts, y: val ?? null });
-    moveWindow(chart, ts);
-    chart.update('none');
-  }
-
-  function refreshChartWindows() {
-    const now = Date.now();
-    allCharts.forEach(chart => {
-      moveWindow(chart, now);
-      chart.update('none');
-    });
-  }
-
-  function set(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
-
-  const socket = io();
-  const badge  = document.getElementById('conn-badge');
-  const lastUpdatedEl = document.getElementById('last-updated');
-  socket.on('connect',    () => { badge.textContent = '● Connected';    badge.className = 'badge connected'; });
-  socket.on('disconnect', () => { badge.textContent = '● Disconnected'; badge.className = 'badge'; lastUpdatedEl.textContent = '—'; });
-
-  let totalDupes = 0;
-  let lastDataTs = 0;
-
-  setInterval(() => {
-    refreshChartWindows();
-    if (!socket.connected || lastDataTs === 0) return;
-    const age = Date.now() - lastDataTs;
-    if (age > 10000) {
-      badge.textContent = '● No data (>10s)';
-      badge.className = 'badge stale';
-    } else if (age > 5000) {
-      badge.textContent = '● No data (>5s)';
-      badge.className = 'badge warning';
-    } else {
-      badge.textContent = '● Live';
-      badge.className = 'badge connected';
-    }
-  }, 1000);
-
-  socket.on('metrics', (data) => {
-    const now = new Date();
-    const ts = now.getTime();
-    const p1 = data.paths?.['1'] || {};
-    const p2 = data.paths?.['2'] || {};
-    const m  = data.merged       || {};
-    const rawTotal = (p1.raw_received || 0) + (p2.raw_received || 0);
-    const rawWindow = (p1.raw_window || 0) + (p2.raw_window || 0);
-    const parsedTotal = (p1.received || 0) + (p2.received || 0);
-    const parserDrops = (p1.malformed || 0) + (p2.malformed || 0) + (p1.crc_errors || 0) + (p2.crc_errors || 0) + (p1.unknown_path || 0) + (p2.unknown_path || 0);
-    const hasPacketData = p1.latency != null || p2.latency != null || m.latency != null;
-
-    if (!hasPacketData) {
-      if (rawWindow > 0) {
-        lastDataTs = ts;
-        badge.textContent = '● UDP received, parser mismatch';
-        badge.className = 'badge warning';
-        lastUpdatedEl.textContent = 'Sidste UDP: ' + formatClock(ts);
-        set('pk-total', rawTotal);
-        set('pk-unique', parsedTotal);
-        set('pk-dupes', parserDrops);
-        set('pk-p1', p1.raw_received ?? '—');
-        set('pk-p2', p2.raw_received ?? '—');
-        set('pk-crc', (p1.crc_errors || 0) + (p2.crc_errors || 0));
-        pushDual(pkc.recv, ts, p1.raw_received, p2.raw_received);
-        push(pkc.dupes, ts, parserDrops);
-        push(pkc.unique, ts, parsedTotal);
-      } else if (lastDataTs === 0) {
-        badge.textContent = '● Waiting for packets';
-        badge.className = 'badge warning';
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi-RAT Dashboard</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
       }
-      return;
-    }
 
-    lastDataTs = ts;
-    badge.textContent = '● Live';
-    badge.className = 'badge connected';
-    lastUpdatedEl.textContent = 'Sidste pakke: ' + formatClock(ts);
+      body {
+        background: #0f1117;
+        color: #e0e0e0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
 
-    totalDupes = (p1.duplicates || 0) + (p2.duplicates || 0);
+      header {
+        background: #1a1d27;
+        border-bottom: 1px solid #2a2d3a;
+        padding: 0 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        height: 48px;
+      }
+      header h1 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #fff;
+      }
+      .badge {
+        font-size: 0.72rem;
+        padding: 3px 10px;
+        border-radius: 99px;
+        font-weight: 600;
+        background: #2a2d3a;
+        color: #888;
+      }
+      .badge.connected {
+        background: #1b3a28;
+        color: #50c878;
+      }
+      .badge.warning {
+        background: #3a2f00;
+        color: #f0b429;
+      }
+      .badge.stale {
+        background: #3a1a1a;
+        color: #e05555;
+      }
 
-    if (p1.latency != null) {
-      set('ov-p1-lat', p1.latency.toFixed(2)+' ms'); set('ov-p1-jit', p1.jitter.toFixed(2)+' ms');
-      set('ov-p1-thr', p1.throughput.toFixed(1)+' kbps'); set('ov-p1-loss', p1.loss.toFixed(1)+'%');
-      set('ov-p1-pkts', p1.received); set('ov-p1-dupes', p1.duplicates??0); set('ov-p1-crc', p1.crc_errors??0); set('ov-p1-hops', p1.hops??'—');
-      set('p1-lat', p1.latency.toFixed(2)+' ms'); set('p1-jit', p1.jitter.toFixed(2)+' ms');
-      set('p1-thr', p1.throughput.toFixed(1)+' kbps'); set('p1-loss', p1.loss.toFixed(1)+'%');
-      set('p1-pkts', p1.received); set('p1-dupes', p1.duplicates??0); set('p1-crc', p1.crc_errors??0); set('p1-hops', p1.hops??'—');
-    }
-    if (p2.latency != null) {
-      set('ov-p2-lat', p2.latency.toFixed(2)+' ms'); set('ov-p2-jit', p2.jitter.toFixed(2)+' ms');
-      set('ov-p2-thr', p2.throughput.toFixed(1)+' kbps'); set('ov-p2-loss', p2.loss.toFixed(1)+'%');
-      set('ov-p2-pkts', p2.received); set('ov-p2-dupes', p2.duplicates??0); set('ov-p2-crc', p2.crc_errors??0); set('ov-p2-hops', p2.hops??'—');
-      set('p2-lat', p2.latency.toFixed(2)+' ms'); set('p2-jit', p2.jitter.toFixed(2)+' ms');
-      set('p2-thr', p2.throughput.toFixed(1)+' kbps'); set('p2-loss', p2.loss.toFixed(1)+'%');
-      set('p2-pkts', p2.received); set('p2-dupes', p2.duplicates??0); set('p2-crc', p2.crc_errors??0); set('p2-hops', p2.hops??'—');
-    }
-    if (m.latency != null) {
-      set('ov-m-lat', m.latency.toFixed(2)+' ms'); set('ov-m-jit', m.jitter.toFixed(2)+' ms');
-      set('ov-m-thr', m.throughput.toFixed(1)+' kbps'); set('ov-m-loss', m.loss.toFixed(1)+'%');
-      set('ov-m-pkts', m.received); set('ov-m-dupes', totalDupes);
-      set('m-lat', m.latency.toFixed(2)+' ms'); set('m-jit', m.jitter.toFixed(2)+' ms');
-      set('m-thr', m.throughput.toFixed(1)+' kbps'); set('m-loss', m.loss.toFixed(1)+'%');
-      set('m-pkts', m.received); set('m-dupes', totalDupes);
-    }
+      .tabs {
+        display: flex;
+        background: #13151f;
+        border-bottom: 1px solid #2a2d3a;
+        flex-shrink: 0;
+      }
+      .tab {
+        padding: 10px 28px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: #666;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.15s;
+      }
+      .tab:hover {
+        color: #aaa;
+      }
+      .tab.active.t-overview,
+      .tab.active.t-path1,
+      .tab.active.t-path2,
+      .tab.active.t-merged,
+      .tab.active.t-packets {
+        color: #fff;
+        border-color: #fff;
+      }
 
-    // Packets tab
-    const dupes = (p1.duplicates || 0) + (p2.duplicates || 0);
-    set('pk-total',   rawTotal);
-    set('pk-unique',  m.received ?? '—');
-    set('pk-dupes',   dupes);
-    set('pk-p1',      p1.raw_received ?? p1.received ?? '—');
-    set('pk-p2',      p2.raw_received ?? p2.received ?? '—');
-    set('pk-p1-lost', p1.lost ?? '—');
-    set('pk-p2-lost', p2.lost ?? '—');
-    set('pk-crc',     (p1.crc_errors || 0) + (p2.crc_errors || 0));
-    pushDual(pkc.recv,  ts, p1.raw_received ?? p1.received,  p2.raw_received ?? p2.received);
-    pushDual(pkc.loss,  ts, p1.loss,      p2.loss);
-    push(pkc.dupes,  ts, dupes);
-    push(pkc.unique, ts, m.received);
+      .panel {
+        display: none;
+        flex: 1;
+        flex-direction: column;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .panel.active {
+        display: flex;
+      }
 
-    push(ovP1.lat, ts, p1.latency);  push(ovP1.jit, ts, p1.jitter);  push(ovP1.thr, ts, p1.throughput); push(ovP1.loss, ts, p1.loss);
-    push(ovP2.lat, ts, p2.latency);  push(ovP2.jit, ts, p2.jitter);  push(ovP2.thr, ts, p2.throughput); push(ovP2.loss, ts, p2.loss);
-    push(ovM.lat,  ts, m.latency);   push(ovM.jit,  ts, m.jitter);   push(ovM.thr,  ts, m.throughput);  push(ovM.loss,  ts, m.loss);
-    push(p1c.lat,  ts, p1.latency);  push(p1c.jit,  ts, p1.jitter);  push(p1c.thr,  ts, p1.throughput); push(p1c.loss,  ts, p1.loss);
-    push(p2c.lat,  ts, p2.latency);  push(p2c.jit,  ts, p2.jitter);  push(p2c.thr,  ts, p2.throughput); push(p2c.loss,  ts, p2.loss);
-    push(mc.lat,   ts, m.latency);   push(mc.jit,   ts, m.jitter);   push(mc.thr,   ts, m.throughput);  push(mc.loss,   ts, m.loss);
-  });
-</script>
-</body>
+      .stat-bar {
+        background: #13151f;
+        border-bottom: 1px solid #2a2d3a;
+        padding: 10px 24px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+      }
+      .stat-card {
+        background: #ffffff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 8px 16px;
+        min-width: 110px;
+      }
+      .stat-card .lbl {
+        font-size: 0.65rem;
+        color: #999;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .stat-card .val {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin-top: 2px;
+      }
+      .c1 .val {
+        color: #111;
+      }
+      .c2 .val {
+        color: #111;
+      }
+      .cm .val {
+        color: #111;
+      }
+      .cw .val {
+        color: #111;
+      }
+
+      .path-section {
+        padding: 14px 16px 0;
+        flex-shrink: 0;
+      }
+      .path-section-header {
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+        padding-left: 8px;
+        border-left: 3px solid;
+      }
+      .s1 {
+        color: #fff;
+        border-color: #fff;
+      }
+      .s2 {
+        color: #fff;
+        border-color: #fff;
+      }
+      .sm {
+        color: #fff;
+        border-color: #fff;
+      }
+
+      .mini-stats {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .mini-stats .stat-card {
+        background: #ffffff;
+        border: 1px solid #ddd;
+      }
+
+      .charts-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        padding: 0 16px 16px;
+      }
+      .charts-grid.padded {
+        padding: 12px 16px 16px;
+      }
+      .chart-card {
+        background: #ffffff;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        height: 200px;
+      }
+      .chart-card h3 {
+        font-size: 0.78rem;
+        color: #333;
+        font-weight: 500;
+        margin-bottom: 8px;
+        flex-shrink: 0;
+      }
+      .chart-card canvas {
+        flex: 1;
+        min-height: 0;
+      }
+      .divider {
+        height: 1px;
+        background: #2a2d3a;
+        margin: 4px 16px 0;
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Multi-RAT &mdash; WIFRER Live Dashboard</h1>
+      <span id="last-updated" style="font-size: 0.72rem; color: #555">—</span>
+      <span class="badge" id="conn-badge">● Disconnected</span>
+    </header>
+
+    <div class="tabs">
+      <div class="tab t-overview active" data-panel="panel-overview">
+        Overview
+      </div>
+      <div class="tab t-path1" data-panel="panel-path1" id="tab-p1">Path 1</div>
+      <div class="tab t-path2" data-panel="panel-path2" id="tab-p2">Path 2</div>
+      <div class="tab t-merged" data-panel="panel-merged">Merged</div>
+      <div class="tab t-packets" data-panel="panel-packets">Packets</div>
+    </div>
+
+    <!-- ══ OVERVIEW ══ -->
+    <div class="panel active" id="panel-overview">
+      <div class="path-section">
+        <div class="path-section-header s1" id="hdr-p1">Path 1</div>
+        <div class="mini-stats">
+          <div class="stat-card c1">
+            <div class="lbl">Latency</div>
+            <div class="val" id="ov-p1-lat">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">Jitter</div>
+            <div class="val" id="ov-p1-jit">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">Throughput</div>
+            <div class="val" id="ov-p1-thr">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">Loss</div>
+            <div class="val" id="ov-p1-loss">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">Packets</div>
+            <div class="val" id="ov-p1-pkts">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">Duplicates</div>
+            <div class="val" id="ov-p1-dupes">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">CRC Errors</div>
+            <div class="val" id="ov-p1-crc">—</div>
+          </div>
+          <div class="stat-card c1">
+            <div class="lbl">Hops</div>
+            <div class="val" id="ov-p1-hops">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Latency (ms)</h3>
+          <canvas id="ov-p1-c-lat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Jitter (ms)</h3>
+          <canvas id="ov-p1-c-jit"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Throughput (kbps)</h3>
+          <canvas id="ov-p1-c-thr"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="ov-p1-c-loss"></canvas>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="path-section">
+        <div class="path-section-header s2" id="hdr-p2">Path 2</div>
+        <div class="mini-stats">
+          <div class="stat-card c2">
+            <div class="lbl">Latency</div>
+            <div class="val" id="ov-p2-lat">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">Jitter</div>
+            <div class="val" id="ov-p2-jit">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">Throughput</div>
+            <div class="val" id="ov-p2-thr">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">Loss</div>
+            <div class="val" id="ov-p2-loss">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">Packets</div>
+            <div class="val" id="ov-p2-pkts">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">Duplicates</div>
+            <div class="val" id="ov-p2-dupes">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">CRC Errors</div>
+            <div class="val" id="ov-p2-crc">—</div>
+          </div>
+          <div class="stat-card c2">
+            <div class="lbl">Hops</div>
+            <div class="val" id="ov-p2-hops">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Latency (ms)</h3>
+          <canvas id="ov-p2-c-lat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Jitter (ms)</h3>
+          <canvas id="ov-p2-c-jit"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Throughput (kbps)</h3>
+          <canvas id="ov-p2-c-thr"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="ov-p2-c-loss"></canvas>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="path-section">
+        <div class="path-section-header sm">Merged (WIFRER)</div>
+        <div class="mini-stats">
+          <div class="stat-card cm">
+            <div class="lbl">Latency</div>
+            <div class="val" id="ov-m-lat">—</div>
+          </div>
+          <div class="stat-card cm">
+            <div class="lbl">Jitter</div>
+            <div class="val" id="ov-m-jit">—</div>
+          </div>
+          <div class="stat-card cm">
+            <div class="lbl">Throughput</div>
+            <div class="val" id="ov-m-thr">—</div>
+          </div>
+          <div class="stat-card cm">
+            <div class="lbl">Loss</div>
+            <div class="val" id="ov-m-loss">—</div>
+          </div>
+          <div class="stat-card cm">
+            <div class="lbl">Packets</div>
+            <div class="val" id="ov-m-pkts">—</div>
+          </div>
+          <div class="stat-card cw">
+            <div class="lbl">Dupes elim.</div>
+            <div class="val" id="ov-m-dupes">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Latency (ms)</h3>
+          <canvas id="ov-m-c-lat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Jitter (ms)</h3>
+          <canvas id="ov-m-c-jit"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Throughput (kbps)</h3>
+          <canvas id="ov-m-c-thr"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="ov-m-c-loss"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PATH 1 ══ -->
+    <div class="panel" id="panel-path1">
+      <div class="stat-bar">
+        <div class="stat-card c1">
+          <div class="lbl">Latency</div>
+          <div class="val" id="p1-lat">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">Jitter</div>
+          <div class="val" id="p1-jit">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">Throughput</div>
+          <div class="val" id="p1-thr">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">Loss</div>
+          <div class="val" id="p1-loss">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">Packets</div>
+          <div class="val" id="p1-pkts">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">Duplicates</div>
+          <div class="val" id="p1-dupes">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">CRC Errors</div>
+          <div class="val" id="p1-crc">—</div>
+        </div>
+        <div class="stat-card c1">
+          <div class="lbl">Hops</div>
+          <div class="val" id="p1-hops">—</div>
+        </div>
+      </div>
+      <div class="charts-grid padded">
+        <div class="chart-card">
+          <h3>Latency (ms)</h3>
+          <canvas id="p1-c-lat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Jitter (ms)</h3>
+          <canvas id="p1-c-jit"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Throughput (kbps)</h3>
+          <canvas id="p1-c-thr"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="p1-c-loss"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PATH 2 ══ -->
+    <div class="panel" id="panel-path2">
+      <div class="stat-bar">
+        <div class="stat-card c2">
+          <div class="lbl">Latency</div>
+          <div class="val" id="p2-lat">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">Jitter</div>
+          <div class="val" id="p2-jit">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">Throughput</div>
+          <div class="val" id="p2-thr">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">Loss</div>
+          <div class="val" id="p2-loss">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">Packets</div>
+          <div class="val" id="p2-pkts">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">Duplicates</div>
+          <div class="val" id="p2-dupes">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">CRC Errors</div>
+          <div class="val" id="p2-crc">—</div>
+        </div>
+        <div class="stat-card c2">
+          <div class="lbl">Hops</div>
+          <div class="val" id="p2-hops">—</div>
+        </div>
+      </div>
+      <div class="charts-grid padded">
+        <div class="chart-card">
+          <h3>Latency (ms)</h3>
+          <canvas id="p2-c-lat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Jitter (ms)</h3>
+          <canvas id="p2-c-jit"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Throughput (kbps)</h3>
+          <canvas id="p2-c-thr"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="p2-c-loss"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ MERGED ══ -->
+    <div class="panel" id="panel-merged">
+      <div class="stat-bar">
+        <div class="stat-card cm">
+          <div class="lbl">Latency</div>
+          <div class="val" id="m-lat">—</div>
+        </div>
+        <div class="stat-card cm">
+          <div class="lbl">Jitter</div>
+          <div class="val" id="m-jit">—</div>
+        </div>
+        <div class="stat-card cm">
+          <div class="lbl">Throughput</div>
+          <div class="val" id="m-thr">—</div>
+        </div>
+        <div class="stat-card cm">
+          <div class="lbl">Loss</div>
+          <div class="val" id="m-loss">—</div>
+        </div>
+        <div class="stat-card cm">
+          <div class="lbl">Packets</div>
+          <div class="val" id="m-pkts">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">Dupes eliminated</div>
+          <div class="val" id="m-dupes">—</div>
+        </div>
+      </div>
+      <div class="charts-grid padded">
+        <div class="chart-card">
+          <h3>Latency (ms)</h3>
+          <canvas id="m-c-lat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Jitter (ms)</h3>
+          <canvas id="m-c-jit"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Throughput (kbps)</h3>
+          <canvas id="m-c-thr"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="m-c-loss"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PACKETS ══ -->
+    <div class="panel" id="panel-packets">
+      <div class="stat-bar">
+        <div class="stat-card cw">
+          <div class="lbl">Total Received</div>
+          <div class="val" id="pk-total">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">Unique (Merged)</div>
+          <div class="val" id="pk-unique">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">Duplicates Dropped</div>
+          <div class="val" id="pk-dupes">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">Path 1 Packets</div>
+          <div class="val" id="pk-p1">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">5G/LTE Packets</div>
+          <div class="val" id="pk-p2">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">Path 1 Lost</div>
+          <div class="val" id="pk-p1-lost">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">5G/LTE Lost</div>
+          <div class="val" id="pk-p2-lost">—</div>
+        </div>
+        <div class="stat-card cw">
+          <div class="lbl">CRC Errors</div>
+          <div class="val" id="pk-crc">—</div>
+        </div>
+      </div>
+      <div class="charts-grid padded">
+        <div class="chart-card">
+          <h3>Total Received per path</h3>
+          <canvas id="pk-c-recv"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Duplicates Dropped</h3>
+          <canvas id="pk-c-dupes"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Packet Loss — Path 1 vs Path 2 (%)</h3>
+          <canvas id="pk-c-loss"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Unique Delivered (Merged)</h3>
+          <canvas id="pk-c-unique"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ── Interface names — change these to match your radio interfaces ──────────
+      const IF_NAME = {
+        1: "WiFi", // e.g. 'WiFi', 'LoRaWAN', '5G', 'LTE'
+        2: "5G/LTE", // e.g. 'WiFi', 'LoRaWAN', '5G', 'LTE'
+      };
+      // ──────────────────────────────────────────────────────────────────────────
+
+      document.getElementById("tab-p1").textContent = IF_NAME[1];
+      document.getElementById("tab-p2").textContent = IF_NAME[2];
+      document.getElementById("hdr-p1").textContent = IF_NAME[1];
+      document.getElementById("hdr-p2").textContent = IF_NAME[2];
+
+      const WINDOW_MS = 5 * 60 * 1000; // Sliding chart window: last 5 minutes
+
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          document
+            .querySelectorAll(".tab")
+            .forEach((t) => t.classList.remove("active"));
+          document
+            .querySelectorAll(".panel")
+            .forEach((p) => p.classList.remove("active"));
+          tab.classList.add("active");
+          document.getElementById(tab.dataset.panel).classList.add("active");
+        });
+      });
+
+      function formatClock(ts) {
+        return new Date(ts).toLocaleTimeString("da-DK", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+      }
+
+      function timeScale() {
+        const now = Date.now();
+        return {
+          type: "linear",
+          min: now - WINDOW_MS,
+          max: now,
+          ticks: {
+            color: "#999",
+            maxTicksLimit: 6,
+            font: { size: 9 },
+            callback: (value) => formatClock(value),
+          },
+          grid: { color: "#e8e8e8" },
+        };
+      }
+
+      function pruneDataset(dataset, now) {
+        const cutoff = now - WINDOW_MS;
+        while (dataset.data.length && dataset.data[0].x < cutoff) {
+          dataset.data.shift();
+        }
+      }
+
+      function moveWindow(chart, now) {
+        chart.options.scales.x.min = now - WINDOW_MS;
+        chart.options.scales.x.max = now;
+        chart.data.datasets.forEach((dataset) => pruneDataset(dataset, now));
+      }
+
+      function makeChart(id) {
+        return new Chart(document.getElementById(id), {
+          type: "line",
+          data: {
+            datasets: [
+              {
+                data: [],
+                borderColor: "#111111",
+                backgroundColor: "rgba(0,0,0,0.08)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.3,
+                fill: true,
+              },
+            ],
+          },
+          options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: "#fff",
+                borderColor: "#ccc",
+                borderWidth: 1,
+                titleColor: "#333",
+                bodyColor: "#555",
+                callbacks: {
+                  title: (items) =>
+                    items[0] ? formatClock(items[0].parsed.x) : "",
+                },
+              },
+            },
+            scales: {
+              x: timeScale(),
+              y: {
+                beginAtZero: true,
+                ticks: { color: "#999", font: { size: 9 } },
+                grid: { color: "#e8e8e8" },
+              },
+            },
+          },
+        });
+      }
+
+      // Packet tab — dual-dataset chart (Path 1 + Path 2)
+      function makeDualChart(id, label1, color1, label2, color2) {
+        return new Chart(document.getElementById(id), {
+          type: "line",
+          data: {
+            datasets: [
+              {
+                label: label1,
+                data: [],
+                borderColor: color1,
+                backgroundColor: "rgba(0,0,0,0)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.3,
+              },
+              {
+                label: label2,
+                data: [],
+                borderColor: color2,
+                backgroundColor: "rgba(0,0,0,0)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.3,
+                borderDash: [4, 3],
+              },
+            ],
+          },
+          options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: true,
+                labels: { color: "#333", font: { size: 9 } },
+              },
+              tooltip: {
+                backgroundColor: "#fff",
+                borderColor: "#ccc",
+                borderWidth: 1,
+                titleColor: "#333",
+                bodyColor: "#555",
+                callbacks: {
+                  title: (items) =>
+                    items[0] ? formatClock(items[0].parsed.x) : "",
+                },
+              },
+            },
+            scales: {
+              x: timeScale(),
+              y: {
+                beginAtZero: true,
+                ticks: { color: "#999", font: { size: 9 } },
+                grid: { color: "#e8e8e8" },
+              },
+            },
+          },
+        });
+      }
+
+      function pushDual(chart, ts, val1, val2) {
+        chart.data.datasets[0].data.push({ x: ts, y: val1 ?? null });
+        chart.data.datasets[1].data.push({ x: ts, y: val2 ?? null });
+        moveWindow(chart, ts);
+        chart.update("none");
+      }
+
+      const pkc = {
+        recv: makeDualChart(
+          "pk-c-recv",
+          IF_NAME[1],
+          "#333",
+          IF_NAME[2],
+          "#999",
+        ),
+        dupes: makeChart("pk-c-dupes"),
+        loss: makeDualChart(
+          "pk-c-loss",
+          IF_NAME[1],
+          "#333",
+          IF_NAME[2],
+          "#999",
+        ),
+        unique: makeChart("pk-c-unique"),
+      };
+
+      const ovP1 = {
+        lat: makeChart("ov-p1-c-lat"),
+        jit: makeChart("ov-p1-c-jit"),
+        thr: makeChart("ov-p1-c-thr"),
+        loss: makeChart("ov-p1-c-loss"),
+      };
+      const ovP2 = {
+        lat: makeChart("ov-p2-c-lat"),
+        jit: makeChart("ov-p2-c-jit"),
+        thr: makeChart("ov-p2-c-thr"),
+        loss: makeChart("ov-p2-c-loss"),
+      };
+      const ovM = {
+        lat: makeChart("ov-m-c-lat"),
+        jit: makeChart("ov-m-c-jit"),
+        thr: makeChart("ov-m-c-thr"),
+        loss: makeChart("ov-m-c-loss"),
+      };
+      const p1c = {
+        lat: makeChart("p1-c-lat"),
+        jit: makeChart("p1-c-jit"),
+        thr: makeChart("p1-c-thr"),
+        loss: makeChart("p1-c-loss"),
+      };
+      const p2c = {
+        lat: makeChart("p2-c-lat"),
+        jit: makeChart("p2-c-jit"),
+        thr: makeChart("p2-c-thr"),
+        loss: makeChart("p2-c-loss"),
+      };
+      const mc = {
+        lat: makeChart("m-c-lat"),
+        jit: makeChart("m-c-jit"),
+        thr: makeChart("m-c-thr"),
+        loss: makeChart("m-c-loss"),
+      };
+
+      const allCharts = [
+        ...Object.values(pkc),
+        ...Object.values(ovP1),
+        ...Object.values(ovP2),
+        ...Object.values(ovM),
+        ...Object.values(p1c),
+        ...Object.values(p2c),
+        ...Object.values(mc),
+      ];
+
+      function push(chart, ts, val) {
+        chart.data.datasets[0].data.push({ x: ts, y: val ?? null });
+        moveWindow(chart, ts);
+        chart.update("none");
+      }
+
+      function refreshChartWindows() {
+        const now = Date.now();
+        allCharts.forEach((chart) => {
+          moveWindow(chart, now);
+          chart.update("none");
+        });
+      }
+
+      function set(id, text) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      }
+
+      const socket = io();
+      const badge = document.getElementById("conn-badge");
+      const lastUpdatedEl = document.getElementById("last-updated");
+      socket.on("connect", () => {
+        badge.textContent = "● Connected";
+        badge.className = "badge connected";
+      });
+      socket.on("disconnect", () => {
+        badge.textContent = "● Disconnected";
+        badge.className = "badge";
+        lastUpdatedEl.textContent = "—";
+      });
+
+      let totalDupes = 0;
+      let lastDataTs = 0;
+
+      setInterval(() => {
+        refreshChartWindows();
+        if (!socket.connected || lastDataTs === 0) return;
+        const age = Date.now() - lastDataTs;
+        if (age > 10000) {
+          badge.textContent = "● No data (>10s)";
+          badge.className = "badge stale";
+        } else if (age > 5000) {
+          badge.textContent = "● No data (>5s)";
+          badge.className = "badge warning";
+        } else {
+          badge.textContent = "● Live";
+          badge.className = "badge connected";
+        }
+      }, 1000);
+
+      socket.on("metrics", (data) => {
+        const now = new Date();
+        const ts = now.getTime();
+        const p1 = data.paths?.["1"] || {};
+        const p2 = data.paths?.["2"] || {};
+        const m = data.merged || {};
+        const rawTotal = (p1.raw_received || 0) + (p2.raw_received || 0);
+        const rawWindow = (p1.raw_window || 0) + (p2.raw_window || 0);
+        const parsedTotal = (p1.received || 0) + (p2.received || 0);
+        const parserDrops =
+          (p1.malformed || 0) +
+          (p2.malformed || 0) +
+          (p1.crc_errors || 0) +
+          (p2.crc_errors || 0) +
+          (p1.unknown_path || 0) +
+          (p2.unknown_path || 0);
+        const hasPacketData =
+          p1.latency != null || p2.latency != null || m.latency != null;
+
+        if (!hasPacketData) {
+          if (rawWindow > 0) {
+            lastDataTs = ts;
+            badge.textContent = "● UDP received, parser mismatch";
+            badge.className = "badge warning";
+            lastUpdatedEl.textContent = "Sidste UDP: " + formatClock(ts);
+            set("pk-total", rawTotal);
+            set("pk-unique", parsedTotal);
+            set("pk-dupes", parserDrops);
+            set("pk-p1", p1.raw_received ?? "—");
+            set("pk-p2", p2.raw_received ?? "—");
+            set("pk-crc", (p1.crc_errors || 0) + (p2.crc_errors || 0));
+            pushDual(pkc.recv, ts, p1.raw_received, p2.raw_received);
+            push(pkc.dupes, ts, parserDrops);
+            push(pkc.unique, ts, parsedTotal);
+          } else if (lastDataTs === 0) {
+            badge.textContent = "● Waiting for packets";
+            badge.className = "badge warning";
+          }
+          return;
+        }
+
+        lastDataTs = ts;
+        badge.textContent = "● Live";
+        badge.className = "badge connected";
+        lastUpdatedEl.textContent = "Sidste pakke: " + formatClock(ts);
+
+        totalDupes = (p1.duplicates || 0) + (p2.duplicates || 0);
+
+        if (p1.latency != null) {
+          set("ov-p1-lat", p1.latency.toFixed(2) + " ms");
+          set("ov-p1-jit", p1.jitter.toFixed(2) + " ms");
+          set("ov-p1-thr", p1.throughput.toFixed(1) + " kbps");
+          set("ov-p1-loss", p1.loss.toFixed(1) + "%");
+          set("ov-p1-pkts", p1.received);
+          set("ov-p1-dupes", p1.duplicates ?? 0);
+          set("ov-p1-crc", p1.crc_errors ?? 0);
+          set("ov-p1-hops", p1.hops ?? "—");
+          set("p1-lat", p1.latency.toFixed(2) + " ms");
+          set("p1-jit", p1.jitter.toFixed(2) + " ms");
+          set("p1-thr", p1.throughput.toFixed(1) + " kbps");
+          set("p1-loss", p1.loss.toFixed(1) + "%");
+          set("p1-pkts", p1.received);
+          set("p1-dupes", p1.duplicates ?? 0);
+          set("p1-crc", p1.crc_errors ?? 0);
+          set("p1-hops", p1.hops ?? "—");
+        }
+        if (p2.latency != null) {
+          set("ov-p2-lat", p2.latency.toFixed(2) + " ms");
+          set("ov-p2-jit", p2.jitter.toFixed(2) + " ms");
+          set("ov-p2-thr", p2.throughput.toFixed(1) + " kbps");
+          set("ov-p2-loss", p2.loss.toFixed(1) + "%");
+          set("ov-p2-pkts", p2.received);
+          set("ov-p2-dupes", p2.duplicates ?? 0);
+          set("ov-p2-crc", p2.crc_errors ?? 0);
+          set("ov-p2-hops", p2.hops ?? "—");
+          set("p2-lat", p2.latency.toFixed(2) + " ms");
+          set("p2-jit", p2.jitter.toFixed(2) + " ms");
+          set("p2-thr", p2.throughput.toFixed(1) + " kbps");
+          set("p2-loss", p2.loss.toFixed(1) + "%");
+          set("p2-pkts", p2.received);
+          set("p2-dupes", p2.duplicates ?? 0);
+          set("p2-crc", p2.crc_errors ?? 0);
+          set("p2-hops", p2.hops ?? "—");
+        }
+        if (m.latency != null) {
+          set("ov-m-lat", m.latency.toFixed(2) + " ms");
+          set("ov-m-jit", m.jitter.toFixed(2) + " ms");
+          set("ov-m-thr", m.throughput.toFixed(1) + " kbps");
+          set("ov-m-loss", m.loss.toFixed(1) + "%");
+          set("ov-m-pkts", m.received);
+          set("ov-m-dupes", totalDupes);
+          set("m-lat", m.latency.toFixed(2) + " ms");
+          set("m-jit", m.jitter.toFixed(2) + " ms");
+          set("m-thr", m.throughput.toFixed(1) + " kbps");
+          set("m-loss", m.loss.toFixed(1) + "%");
+          set("m-pkts", m.received);
+          set("m-dupes", totalDupes);
+        }
+
+        // Packets tab
+        const dupes = (p1.duplicates || 0) + (p2.duplicates || 0);
+        set("pk-total", rawTotal);
+        set("pk-unique", m.received ?? "—");
+        set("pk-dupes", dupes);
+        set("pk-p1", p1.raw_received ?? p1.received ?? "—");
+        set("pk-p2", p2.raw_received ?? p2.received ?? "—");
+        set("pk-p1-lost", p1.lost ?? "—");
+        set("pk-p2-lost", p2.lost ?? "—");
+        set("pk-crc", (p1.crc_errors || 0) + (p2.crc_errors || 0));
+        pushDual(
+          pkc.recv,
+          ts,
+          p1.raw_received ?? p1.received,
+          p2.raw_received ?? p2.received,
+        );
+        pushDual(pkc.loss, ts, p1.loss, p2.loss);
+        push(pkc.dupes, ts, dupes);
+        push(pkc.unique, ts, m.received);
+
+        push(ovP1.lat, ts, p1.latency);
+        push(ovP1.jit, ts, p1.jitter);
+        push(ovP1.thr, ts, p1.throughput);
+        push(ovP1.loss, ts, p1.loss);
+        push(ovP2.lat, ts, p2.latency);
+        push(ovP2.jit, ts, p2.jitter);
+        push(ovP2.thr, ts, p2.throughput);
+        push(ovP2.loss, ts, p2.loss);
+        push(ovM.lat, ts, m.latency);
+        push(ovM.jit, ts, m.jitter);
+        push(ovM.thr, ts, m.throughput);
+        push(ovM.loss, ts, m.loss);
+        push(p1c.lat, ts, p1.latency);
+        push(p1c.jit, ts, p1.jitter);
+        push(p1c.thr, ts, p1.throughput);
+        push(p1c.loss, ts, p1.loss);
+        push(p2c.lat, ts, p2.latency);
+        push(p2c.jit, ts, p2.jitter);
+        push(p2c.thr, ts, p2.throughput);
+        push(p2c.loss, ts, p2.loss);
+        push(mc.lat, ts, m.latency);
+        push(mc.jit, ts, m.jitter);
+        push(mc.thr, ts, m.throughput);
+        push(mc.loss, ts, m.loss);
+      });
+    </script>
+  </body>
 </html>
