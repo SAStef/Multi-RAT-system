@@ -8,7 +8,7 @@ Receives UDP packets on:
 Packet format, matching Multi-RAT-Sender/NetworkClient.kt:
   seq(I=4) | session(I=4) | ts_ns(Q=8) | path(B=1) | ttl(B=1) | crc16(H=2) | pad(x=1)
 
-The receiver posts one metrics snapshot per second to the Express dashboard.
+The receiver posts one metrics snapshot per second to the Express dashboard. And now also the App 
 It also tracks raw UDP packets, so tcpdump-visible packets still appear in the
 dashboard even if the packet format or CRC does not parse.
 """
@@ -29,6 +29,8 @@ HDR_FMT = "!IIQBBHx"
 HDR_SIZE = struct.calcsize(HDR_FMT)
 FRER_WINDOW = 2000
 EXPRESS_URL = "http://localhost:3000/metrics"
+ANDROID_URL = "http://PHONE_IP:8080/metrics"  # replacement needed
+SEND_TO_ANDROID = True
 PATH_LABELS = {1: "WiFi", 2: "5G/LTE"}
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -263,18 +265,23 @@ def snapshot_merged(m: dict):
     return result
 
 
-def post_to_express(payload: dict):
+def post_json(url: str, payload: dict, name: str):
     try:
-        body = json.dumps(payload).encode()
+        body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            EXPRESS_URL,
+            url,
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=1)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[POST ERROR] Could not send to {name}: {e}")
+def post_metrics(payload: dict):
+    post_json(EXPRESS_URL, payload, "Express dashboard")
+
+    if SEND_TO_ANDROID:
+        post_json(ANDROID_URL, payload, "Android app")
 
 
 def aggregator_thread():
@@ -312,7 +319,7 @@ def aggregator_thread():
                     f"loss={merged_snap['loss']:5.1f}%"
                 )
 
-        post_to_express(payload)
+        post_metrics(payload) 
 
 
 def main():
