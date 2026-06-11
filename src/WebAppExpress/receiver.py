@@ -8,7 +8,13 @@ Receives UDP packets on:
 Packet format, matching Multi-RAT-Sender/NetworkClient.kt:
   seq(I=4) | session(I=4) | ts_ns(Q=8) | path(B=1) | ttl(B=1) | crc16(H=2) | pad(x=1)
 
-The receiver posts one metrics snapshot per second to the Express dashboard. And now also the App 
+The receiver posts one metrics snapshot per second to the Express dashboard,
+and sends the same snapshot back to the phone as a UDP datagram on both radio
+paths. The reply is addressed to the source ip:port observed on each path and
+sent from the same server socket the path arrives on, so it traverses the
+NAT/CGNAT mapping that the phone's own 20 pps stream keeps alive (an inbound
+HTTP connection to the phone would be blocked by CGNAT). Sending on both paths
+is deliberate 1+1 redundancy; the app deduplicates snapshots on their time field.
 It also tracks raw UDP packets, so tcpdump-visible packets still appear in the
 dashboard even if the packet format or CRC does not parse.
 """
@@ -29,8 +35,7 @@ HDR_FMT = "!IIQBBHx"
 HDR_SIZE = struct.calcsize(HDR_FMT)
 FRER_WINDOW = 2000
 EXPRESS_URL = "http://localhost:3000/metrics"
-ANDROID_URL = "http://PHONE_IP:8080/metrics"  # replacement needed
-SEND_TO_ANDROID = True
+FEEDBACK_MAX_AGE = 5.0  # only reply to a path heard from this recently (seconds)
 PATH_LABELS = {1: "WiFi", 2: "5G/LTE"}
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -65,6 +70,8 @@ def new_path_metrics() -> dict:
         "bytes_window": 0,
         "raw_bytes_window": 0,
         "last_from": None,
+        "last_addr": None,
+        "last_seen": 0.0,
         "latency_hist": collections.deque(maxlen=500),
         "jitter_hist": collections.deque(maxlen=500),
         "hops_hist": collections.deque(maxlen=500),
@@ -185,6 +192,8 @@ def receiver_thread(sock: socket.socket):
                 m["raw_window"] += 1
                 m["raw_bytes_window"] += len(data)
                 m["last_from"] = f"{addr[0]}:{addr[1]}"
+                m["last_addr"] = addr
+                m["last_seen"] = time.time()
 
             if len(data) < HDR_SIZE:
                 with metrics_lock:
@@ -313,14 +322,33 @@ def post_json(url: str, payload: dict, name: str):
         urllib.request.urlopen(req, timeout=1)
     except Exception as e:
         print(f"[POST ERROR] Could not send to {name}: {e}")
-def post_metrics(payload: dict):
-    post_json(EXPRESS_URL, payload, "Express dashboard")
-
-    if SEND_TO_ANDROID:
-        post_json(ANDROID_URL, payload, "Android app")
 
 
-def aggregator_thread():
+def send_feedback(socks: dict, payload: dict):
+    """Send the snapshot back to the phone over both UDP paths.
+
+    The reply goes to the source address last observed on each path, through
+    the same server socket that path arrives on, so the source ip:port of the
+    reply exactly mirrors the phone's outgoing flow and passes the NAT/CGNAT.
+    Paths that have been silent for FEEDBACK_MAX_AGE seconds are skipped.
+    """
+    body = json.dumps(payload).encode("utf-8")
+    now = time.time()
+    with metrics_lock:
+        targets = [
+            (socks[path], metrics[path]["last_addr"])
+            for path in socks
+            if metrics[path]["last_addr"] is not None
+            and now - metrics[path]["last_seen"] < FEEDBACK_MAX_AGE
+        ]
+    for sock, addr in targets:
+        try:
+            sock.sendto(body, addr)
+        except OSError as e:
+            print(f"[Feedback] send to {addr} failed: {e}")
+
+
+def aggregator_thread(socks: dict):
     while not stop_event.is_set():
         time.sleep(1.0)
         payload = {"time": round(time.perf_counter() - t0, 1), "paths": {}, "merged": {}}
@@ -355,7 +383,8 @@ def aggregator_thread():
                     f"loss={merged_snap['loss']:5.1f}%"
                 )
 
-        post_metrics(payload) 
+        post_json(EXPRESS_URL, payload, "Express dashboard")
+        send_feedback(socks, payload)
 
 
 def main():
@@ -368,9 +397,13 @@ def main():
 
     threading.Thread(target=receiver_thread, args=(sock1,), name="rx-wifi", daemon=True).start()
     threading.Thread(target=receiver_thread, args=(sock2,), name="rx-cell", daemon=True).start()
-    threading.Thread(target=aggregator_thread, name="metrics-aggregator", daemon=True).start()
+    threading.Thread(
+        target=aggregator_thread, args=({1: sock1, 2: sock2},),
+        name="metrics-aggregator", daemon=True,
+    ).start()
 
     print("Receiver running - posting metrics to", EXPRESS_URL)
+    print("Feedback snapshots are sent back to the phone on both UDP paths")
     print("Press Ctrl-C to stop")
     try:
         while True:
