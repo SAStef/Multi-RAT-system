@@ -21,13 +21,16 @@ dashboard even if the packet format or CRC does not parse.
 
 import binascii
 import collections
+import csv
 import json
+import os
 import platform
 import socket
 import struct
 import threading
 import time
 import urllib.request
+from datetime import datetime, timezone
 
 PORT1 = 6967
 PORT2 = 6968
@@ -37,6 +40,7 @@ FRER_WINDOW = 2000
 EXPRESS_URL = "http://localhost:3000/metrics"
 FEEDBACK_MAX_AGE = 5.0  # only reply to a path heard from this recently (seconds)
 PATH_LABELS = {1: "WiFi", 2: "5G/LTE"}
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 _IS_WINDOWS = platform.system() == "Windows"
 _HAS_RECVMSG = hasattr(socket.socket, "recvmsg") and not _IS_WINDOWS
@@ -324,6 +328,56 @@ def post_json(url: str, payload: dict, name: str):
         print(f"[POST ERROR] Could not send to {name}: {e}")
 
 
+_CSV_STREAM_KEYS = ("latency", "jitter", "throughput", "loss",
+                    "received", "lost", "duplicates", "crc_errors", "hops")
+_CSV_MERGED_KEYS = ("latency", "jitter", "throughput", "loss", "received", "lost")
+CSV_FIELDS = (["utc", "time"]
+              + [f"p1_{k}" for k in _CSV_STREAM_KEYS]
+              + [f"p2_{k}" for k in _CSV_STREAM_KEYS]
+              + [f"m_{k}" for k in _CSV_MERGED_KEYS])
+
+
+class CsvLogger:
+    """Appends one row per snapshot to logs/metrics_<starttime>.csv.
+
+    One file per receiver run, created on the first snapshot that contains
+    traffic; idle seconds (no raw packets on either path) are skipped so the
+    24/7 server does not grow an endless file of zeros between experiments.
+    Line-buffered so rows survive a crash or restart.
+    """
+
+    def __init__(self):
+        self._writer = None
+        self._file = None
+
+    def log(self, payload: dict):
+        try:
+            p1 = payload["paths"].get("1", {})
+            p2 = payload["paths"].get("2", {})
+            merged = payload.get("merged") or {}
+            if not (p1.get("raw_window") or p2.get("raw_window") or merged):
+                return
+            if self._writer is None:
+                os.makedirs(LOG_DIR, exist_ok=True)
+                name = time.strftime("metrics_%Y%m%d_%H%M%S.csv", time.gmtime())
+                self._file = open(os.path.join(LOG_DIR, name), "w",
+                                  newline="", buffering=1)
+                self._writer = csv.writer(self._file)
+                self._writer.writerow(CSV_FIELDS)
+                print(f"[CSV] Logging snapshots to {self._file.name}")
+            row = [datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                   payload["time"]]
+            for stream in (p1, p2):
+                row += [stream.get(k) for k in _CSV_STREAM_KEYS]
+            row += [merged.get(k) for k in _CSV_MERGED_KEYS]
+            self._writer.writerow(row)
+        except Exception as e:
+            print(f"[CSV] log failed: {e}")
+
+
+csv_logger = CsvLogger()
+
+
 def send_feedback(socks: dict, payload: dict):
     """Send the snapshot back to the phone over both UDP paths.
 
@@ -385,6 +439,7 @@ def aggregator_thread(socks: dict):
 
         post_json(EXPRESS_URL, payload, "Express dashboard")
         send_feedback(socks, payload)
+        csv_logger.log(payload)
 
 
 def main():
