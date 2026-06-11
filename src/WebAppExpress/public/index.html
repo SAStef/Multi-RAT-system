@@ -690,7 +690,10 @@
                 backgroundColor: "rgba(0,0,0,0.08)",
                 borderWidth: 1.5,
                 pointRadius: 0,
-                tension: 0.3,
+                // Straight segments between samples: bezier smoothing (tension > 0)
+                // overshoots on abrupt start/stop transitions and draws bulges
+                // that never reach the actual 0/1 values.
+                tension: 0,
                 fill: true,
               },
             ],
@@ -738,7 +741,7 @@
                 backgroundColor: "rgba(0,0,0,0)",
                 borderWidth: 1.5,
                 pointRadius: 0,
-                tension: 0.3,
+                tension: 0,
               },
               {
                 label: label2,
@@ -747,7 +750,7 @@
                 backgroundColor: "rgba(0,0,0,0)",
                 borderWidth: 1.5,
                 pointRadius: 0,
-                tension: 0.3,
+                tension: 0,
                 borderDash: [4, 3],
               },
             ],
