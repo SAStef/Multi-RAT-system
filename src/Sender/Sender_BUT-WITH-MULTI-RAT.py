@@ -18,7 +18,7 @@ sock1 = s.socket(s.AF_INET, s.SOCK_DGRAM)
 sock2 = s.socket(s.AF_INET, s.SOCK_DGRAM)
 
 sock1.bind(("10.209.188.129",0))
-sock2.bind(("",0))
+sock2.bind(("Insert 4G/5G IP here",0))
 
 session_id = int.from_bytes(os.urandom(4), "big")
 
@@ -39,9 +39,9 @@ try:
             time.sleep(next_send - now)
         ts_ns = time.time_ns()
         payload = os.urandom(payload_size)
+        
+        cs = crc16(payload) # Checksum
         # Path 1
-        cs = crc16(payload)
-
         packet1 = struct.pack(HDR_FMT, seq, session_id, ts_ns, 1, cs) + payload
         sock1.sendto(packet1, (ip, Wifiport))
         # Path 2 
