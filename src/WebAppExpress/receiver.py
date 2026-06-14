@@ -226,6 +226,12 @@ def receiver_thread(sock: socket.socket):
             if crc16(payload) != cs:
                 with metrics_lock:
                     metrics[metric_path]["crc_errors"] += 1
+                    # A corrupted packet still physically arrived on this path, so it
+                    # is a corruption (crc_errors), not a loss. Register its sequence
+                    # number in the loss tracking so it is not also counted as a gap.
+                    # The CRC only covers the payload, so the header (and thus seq)
+                    # is still usable here.
+                    update_loss_tracking(metrics[metric_path], session_id, seq)
                 print(f"[{PATH_LABELS[metric_path]}] BAD CRC seq={seq} from={addr}")
                 continue
 
