@@ -39,6 +39,9 @@ HDR_SIZE = struct.calcsize(HDR_FMT)
 FRER_WINDOW = 2000
 EXPRESS_URL = "http://localhost:3000/metrics"
 FEEDBACK_MAX_AGE = 5.0  # only reply to a path heard from this recently (seconds)
+PATH_SILENCE_RESET = 2.0  # a path silent longer than this is treated as deliberately
+                          # off (or dead); its loss baseline restarts on resume so the
+                          # outage gap is NOT counted as packet loss
 PATH_LABELS = {1: "WiFi", 2: "5G/LTE"}
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
@@ -76,6 +79,7 @@ def new_path_metrics() -> dict:
         "last_from": None,
         "last_addr": None,
         "last_seen": 0.0,
+        "last_parsed": None,
         "latency_hist": collections.deque(maxlen=500),
         "jitter_hist": collections.deque(maxlen=500),
         "hops_hist": collections.deque(maxlen=500),
@@ -91,6 +95,7 @@ def new_merged_metrics() -> dict:
         "seq_count": 0,
         "last_latency": None,
         "bytes_window": 0,
+        "last_parsed": None,
         "latency_hist": collections.deque(maxlen=500),
         "jitter_hist": collections.deque(maxlen=500),
     }
@@ -146,6 +151,21 @@ def loss_from_tracking(m: dict):
     expected = m["seq_max"] - m["seq_min"] + 1
     lost = max(0, expected - m["seq_count"])
     return expected, lost
+
+
+def silence_reset(m: dict, now: float):
+    """Restart a stream's measurement baseline after a silent gap.
+
+    When a path is switched off (or dies) it stops sending, then resumes from a
+    much higher sequence number. Counting the skipped numbers as loss would be
+    wrong, because nothing was lost - the path was simply not measured. So if a
+    stream has been silent for longer than PATH_SILENCE_RESET, we drop its loss
+    span and latency baseline; the next packet starts a fresh measurement.
+    """
+    if m["last_parsed"] is not None and now - m["last_parsed"] > PATH_SILENCE_RESET:
+        m["loss_session"] = None   # forces update_loss_tracking to re-seed from this packet
+        m["last_latency"] = None   # avoids a bogus jitter spike across the gap
+    m["last_parsed"] = now
 
 
 def update_parsed_metrics(m: dict, session_id: int, seq: int, latency_ms: float, payload_size: int, hops=None):
@@ -238,7 +258,9 @@ def receiver_thread(sock: socket.socket):
             latency_ms = max(0.0, (time.time_ns() - ts_ns) / 1_000_000)
             hops = sent_ttl - received_ttl if received_ttl is not None else None
 
+            now_t = time.time()
             with metrics_lock:
+                silence_reset(metrics[metric_path], now_t)
                 update_parsed_metrics(metrics[metric_path], session_id, seq, latency_ms, len(payload), hops)
 
                 if frer_is_duplicate(session_id, seq):
@@ -246,6 +268,7 @@ def receiver_thread(sock: socket.socket):
                     print(f"[FRER DROP] seq={seq} path={metric_path} duplicate eliminated", flush=True)
                     continue
 
+                silence_reset(merged_metrics, now_t)
                 update_parsed_metrics(merged_metrics, session_id, seq, latency_ms, len(payload))
 
     except Exception as exc:
