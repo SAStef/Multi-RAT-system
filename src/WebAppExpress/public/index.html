@@ -554,6 +554,10 @@
           <h3>Packet Loss (%)</h3>
           <canvas id="m-c-loss"></canvas>
         </div>
+        <div class="chart-card" style="grid-column: 1 / -1; height: 240px">
+          <h3 id="hdr-m-cmp">Latency — Path 1 vs Path 2 (ms)</h3>
+          <canvas id="m-c-cmp"></canvas>
+        </div>
       </div>
     </div>
 
@@ -625,6 +629,8 @@
       document.getElementById("tab-p2").textContent = IF_NAME[2];
       document.getElementById("hdr-p1").textContent = IF_NAME[1];
       document.getElementById("hdr-p2").textContent = IF_NAME[2];
+      document.getElementById("hdr-m-cmp").textContent =
+        `Latency — ${IF_NAME[1]} vs ${IF_NAME[2]} (ms)`;
 
       const WINDOW_MS = 5 * 60 * 1000; // Sliding chart window: last 5 minutes
 
@@ -729,7 +735,8 @@
       }
 
       // Packet tab — dual-dataset chart (Path 1 + Path 2)
-      function makeDualChart(id, label1, color1, label2, color2) {
+      // dash2 controls the second line's dashing; pass [] for a solid line.
+      function makeDualChart(id, label1, color1, label2, color2, dash2 = [4, 3]) {
         return new Chart(document.getElementById(id), {
           type: "line",
           data: {
@@ -751,7 +758,7 @@
                 borderWidth: 1.5,
                 pointRadius: 0,
                 tension: 0,
-                borderDash: [4, 3],
+                borderDash: dash2,
               },
             ],
           },
@@ -849,6 +856,9 @@
         jit: makeChart("m-c-jit"),
         thr: makeChart("m-c-thr"),
         loss: makeChart("m-c-loss"),
+        // Path-1-vs-path-2 latency overlay: blue = path 1, red = path 2,
+        // both solid so the two arrival times can be compared directly.
+        cmp: makeDualChart("m-c-cmp", IF_NAME[1], "#2563eb", IF_NAME[2], "#dc2626", []),
       };
 
       const allCharts = [
@@ -1055,6 +1065,7 @@
         push(mc.jit, ts, m.jitter);
         push(mc.thr, ts, m.throughput);
         push(mc.loss, ts, m.loss);
+        pushDual(mc.cmp, ts, p1.latency, p2.latency);
       });
     </script>
   </body>
