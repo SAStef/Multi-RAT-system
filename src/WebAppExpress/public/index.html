@@ -394,6 +394,10 @@
           <h3>Packet Loss (%)</h3>
           <canvas id="ov-m-c-loss"></canvas>
         </div>
+        <div class="chart-card" style="grid-column: 1 / -1; height: 240px">
+          <h3 id="hdr-ovm-cmp">Latency — Path 1 vs Path 2 (ms)</h3>
+          <canvas id="ov-m-c-cmp"></canvas>
+        </div>
       </div>
     </div>
 
@@ -631,6 +635,8 @@
       document.getElementById("hdr-p2").textContent = IF_NAME[2];
       document.getElementById("hdr-m-cmp").textContent =
         `Latency — ${IF_NAME[1]} vs ${IF_NAME[2]} (ms)`;
+      document.getElementById("hdr-ovm-cmp").textContent =
+        `Latency — ${IF_NAME[1]} vs ${IF_NAME[2]} (ms)`;
 
       const WINDOW_MS = 5 * 60 * 1000; // Sliding chart window: last 5 minutes
 
@@ -838,6 +844,7 @@
         jit: makeChart("ov-m-c-jit"),
         thr: makeChart("ov-m-c-thr"),
         loss: makeChart("ov-m-c-loss"),
+        cmp: makeDualChart("ov-m-c-cmp", IF_NAME[1], "#2563eb", IF_NAME[2], "#dc2626", []),
       };
       const p1c = {
         lat: makeChart("p1-c-lat"),
@@ -1053,6 +1060,7 @@
         push(ovM.jit, ts, m.jitter);
         push(ovM.thr, ts, m.throughput);
         push(ovM.loss, ts, m.loss);
+        pushDual(ovM.cmp, ts, p1.latency, p2.latency);
         push(p1c.lat, ts, p1.latency);
         push(p1c.jit, ts, p1.jitter);
         push(p1c.thr, ts, p1.throughput);
