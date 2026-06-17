@@ -12,7 +12,9 @@ Kør:  python3 test_t2_baseline.py            (lokalt)
 """
 import multirat_testlib as lib
 
+_args = lib.cli()
 lib.run(
     title="T2 Baseline / korrekthed",
-    ip=lib.parse_ip(),
+    ip=_args.ip,
+    duration=_args.seconds,
 )

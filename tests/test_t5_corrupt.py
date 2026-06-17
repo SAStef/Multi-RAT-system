@@ -14,8 +14,10 @@ Kør:  python3 test_t5_corrupt.py            (lokalt)
 """
 import multirat_testlib as lib
 
+_args = lib.cli()
 lib.run(
     title="T5 Korruption / CRC paa path 1 (30%)",
-    ip=lib.parse_ip(),
+    ip=_args.ip,
+    duration=_args.seconds,
     corrupt=(0.30, 0.0),
 )

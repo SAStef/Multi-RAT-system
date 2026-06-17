@@ -13,8 +13,10 @@ Kør:  python3 test_t3_loss.py            (lokalt)
 """
 import multirat_testlib as lib
 
+_args = lib.cli()
 lib.run(
     title="T3 Uafhaengigt pakketab (30% paa begge paths)",
-    ip=lib.parse_ip(),
+    ip=_args.ip,
+    duration=_args.seconds,
     loss=(0.30, 0.30),
 )

@@ -31,11 +31,22 @@ def crc16(data: bytes) -> int:
     return binascii.crc_hqx(data, 0xFFFF)
 
 
-def parse_ip() -> str:
-    """Tillader 'python3 test_xx.py --ip <server-ip>'. Standard = localhost."""
+def cli():
+    """Parser '--ip <server-ip>' og '--seconds <N>' for alle testene.
+
+    --seconds 0 (standard) = kør til q/Ctrl-C (uændret, interaktiv adfærd).
+    --seconds N > 0        = stop automatisk efter N sek, så testen kan scriptes.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--ip", default="127.0.0.1", help="receiver-IP (standard: localhost)")
-    return ap.parse_args().ip
+    ap.add_argument("--seconds", type=float, default=0.0,
+                    help="stop automatisk efter N sek (0 = kør til q)")
+    return ap.parse_args()
+
+
+def parse_ip() -> str:
+    """Bagudkompatibel: returnerer kun IP'en."""
+    return cli().ip
 
 
 class _State:

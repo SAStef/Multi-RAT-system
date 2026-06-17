@@ -252,6 +252,10 @@ def receiver_thread(sock: socket.socket):
                     # The CRC only covers the payload, so the header (and thus seq)
                     # is still usable here.
                     update_loss_tracking(metrics[metric_path], session_id, seq)
+                    bad_latency = max(0.0, (time.time_ns() - ts_ns) / 1_000_000)
+                    bad_hops = sent_ttl - received_ttl if received_ttl is not None else None
+                    # crc_ok=0, is_duplicate left blank: corrupted packets are not deduplicated.
+                    packet_logger.log(metric_path, session_id, seq, bad_latency, bad_hops, 0, "")
                 print(f"[{PATH_LABELS[metric_path]}] BAD CRC seq={seq} from={addr}")
                 continue
 
@@ -263,7 +267,9 @@ def receiver_thread(sock: socket.socket):
                 silence_reset(metrics[metric_path], now_t)
                 update_parsed_metrics(metrics[metric_path], session_id, seq, latency_ms, len(payload), hops)
 
-                if frer_is_duplicate(session_id, seq):
+                is_duplicate = frer_is_duplicate(session_id, seq)
+                packet_logger.log(metric_path, session_id, seq, latency_ms, hops, 1, int(is_duplicate))
+                if is_duplicate:
                     metrics[metric_path]["duplicates"] += 1
                     print(f"[FRER DROP] seq={seq} path={metric_path} duplicate eliminated", flush=True)
                     continue
@@ -405,6 +411,51 @@ class CsvLogger:
 
 
 csv_logger = CsvLogger()
+
+
+# Per-packet raw log: one row per received packet, for offline statistics and
+# boxplots. The metrics CSV above only stores per-second averages, which hide
+# the within-second latency spread, so it is too coarse for a real distribution.
+# On by default so a test run produces raw data with no extra step; disable on
+# the 24/7 server with the environment variable MULTIRAT_PACKET_LOG=0. One file
+# per receiver run, created on the first packet; line-buffered so rows survive a
+# crash. Called inside metrics_lock, so the two receiver threads never interleave
+# a row.
+PACKET_LOG_ENABLED = os.environ.get("MULTIRAT_PACKET_LOG", "1") != "0"
+PACKET_FIELDS = ("utc", "time", "path", "session_id", "seq",
+                 "latency_ms", "hops", "crc_ok", "is_duplicate")
+
+
+class PacketCsvLogger:
+    def __init__(self):
+        self._writer = None
+        self._file = None
+
+    def log(self, path, session_id, seq, latency_ms, hops, crc_ok, is_duplicate):
+        if not PACKET_LOG_ENABLED:
+            return
+        try:
+            if self._writer is None:
+                os.makedirs(LOG_DIR, exist_ok=True)
+                name = time.strftime("packets_%Y%m%d_%H%M%S.csv", time.gmtime())
+                self._file = open(os.path.join(LOG_DIR, name), "w",
+                                  newline="", buffering=1)
+                self._writer = csv.writer(self._file)
+                self._writer.writerow(PACKET_FIELDS)
+                print(f"[CSV] Logging raw packets to {self._file.name}")
+            self._writer.writerow([
+                datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                round(time.perf_counter() - t0, 4),
+                path, session_id, seq,
+                round(latency_ms, 3) if latency_ms is not None else "",
+                hops if hops is not None else "",
+                int(crc_ok), is_duplicate,
+            ])
+        except Exception as e:
+            print(f"[CSV] packet log failed: {e}")
+
+
+packet_logger = PacketCsvLogger()
 
 
 def send_feedback(socks: dict, payload: dict):

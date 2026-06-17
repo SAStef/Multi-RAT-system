@@ -5,4 +5,6 @@ __pycache__/
 venv/
 *.png
 *.pyc
-*.pemsrc/WebAppExpress/logs/
+*.pem
+src/WebAppExpress/logs/
+figures/

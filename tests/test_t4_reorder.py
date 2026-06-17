@@ -14,8 +14,10 @@ Kør:  python3 test_t4_reorder.py            (lokalt)
 """
 import multirat_testlib as lib
 
+_args = lib.cli()
 lib.run(
     title="T4 Reordering paa path 1 (30%)",
-    ip=lib.parse_ip(),
+    ip=_args.ip,
+    duration=_args.seconds,
     reorder=(0.30, 0.0),
 )
