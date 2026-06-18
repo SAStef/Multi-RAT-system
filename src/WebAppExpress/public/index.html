@@ -706,7 +706,10 @@
                 // overshoots on abrupt start/stop transitions and draws bulges
                 // that never reach the actual 0/1 values.
                 tension: 0,
-                fill: true,
+                // No area fill: with a fill, a gap (a path going silent) makes the
+                // shaded area close down to the y=0 baseline at the gap edges, which
+                // reads as the line "dropping to 0". A plain line just breaks cleanly.
+                fill: false,
               },
             ],
           },
@@ -801,9 +804,22 @@
         });
       }
 
+      // Break the line instead of bridging a gap: when a stream goes silent
+      // (e.g. a path is turned off in the degraded test), no samples arrive for
+      // a while. Without this, Chart.js draws a straight diagonal across the gap.
+      // Inserting a null point makes it leave a clean break instead.
+      const GAP_MS = 3000;
+      function pushPoint(dataset, ts, y) {
+        const d = dataset.data;
+        if (d.length && ts - d[d.length - 1].x > GAP_MS) {
+          d.push({ x: d[d.length - 1].x + 1, y: null });
+        }
+        d.push({ x: ts, y: y ?? null });
+      }
+
       function pushDual(chart, ts, val1, val2) {
-        chart.data.datasets[0].data.push({ x: ts, y: val1 ?? null });
-        chart.data.datasets[1].data.push({ x: ts, y: val2 ?? null });
+        pushPoint(chart.data.datasets[0], ts, val1);
+        pushPoint(chart.data.datasets[1], ts, val2);
         moveWindow(chart, ts);
         chart.update("none");
       }
@@ -879,7 +895,7 @@
       ];
 
       function push(chart, ts, val) {
-        chart.data.datasets[0].data.push({ x: ts, y: val ?? null });
+        pushPoint(chart.data.datasets[0], ts, val);
         moveWindow(chart, ts);
         chart.update("none");
       }
