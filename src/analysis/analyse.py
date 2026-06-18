@@ -193,7 +193,11 @@ def collect_csvs(inputs):
     for inp in inputs:
         p = Path(inp)
         if p.is_dir():
-            yield from sorted(p.glob("*.csv"))
+            # Only the per-second metrics CSVs have the p1_/p2_/m_ columns this
+            # script expects. The same logs/ dir also holds packets_*.csv (raw
+            # per-packet, handled by raw_stats.py), so glob narrowly to avoid
+            # feeding those in and crashing on a missing 'p1_latency' column.
+            yield from sorted(p.glob("metrics_*.csv"))
         elif p.is_file():
             yield p
         else:
