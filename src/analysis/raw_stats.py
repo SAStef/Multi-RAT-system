@@ -119,21 +119,8 @@ def path_counts(rows):
 
 
 def write_stats(groups, counts, out: Path, name: str):
-    path = out / f"{name}_latency_stats.csv"
-    with open(path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["stream", *STAT_COLS])
-        for g, _ in GROUPS:
-            d = describe(groups[g])
-            w.writerow([g] + [d[c] if c == "count" else round(d[c], 3) for c in STAT_COLS])
-        w.writerow([])
-        w.writerow(["path", "arrived", "lost", "loss_pct", "duplicates", "crc_errors"])
-        for p in ("1", "2"):
-            c = counts[p]
-            w.writerow([p, c["arrived"], c["lost"], round(c["loss_pct"], 3),
-                        c["duplicates"], c["crc_errors"]])
-
-    # also echo a readable table to the console
+    # Echo a readable table to the console only; the report-ready table is the
+    # .tex file written by write_latex (the separate .csv dump was redundant).
     print(f"\n--- {name} ---")
     print(f"{'stream':<8}{'n':>7}{'mean':>9}{'median':>9}{'p95':>9}{'std':>9}  [ms]")
     for g, _ in GROUPS:
@@ -147,7 +134,6 @@ def write_stats(groups, counts, out: Path, name: str):
         c = counts[p]
         print(f"  path {p}: arrived={c['arrived']} lost={c['lost']} "
               f"({c['loss_pct']:.2f}%) dupes={c['duplicates']} crc_err={c['crc_errors']}")
-    print(f"  stats table -> {path}")
 
 
 def write_latex(groups, counts, out: Path, name: str):
@@ -205,6 +191,83 @@ def plot_boxplot(groups, out: Path, name: str):
     print(f"  boxplot -> {out / (name + '_latency_boxplot.pdf')}")
 
 
+def plot_timeline(rows, out: Path, name: str):
+    """Single over-time figure with time always on the x-axis: per-packet
+    latency on top, per-second loss on the bottom, one line per stream.
+
+    Latency uses valid (crc_ok) packets. Loss is derived per 1-second bin from
+    the sequence numbers (span method: a gap between min/max seq in a bin that
+    is not filled by an arrival is a loss), so no per-second metrics CSV is
+    needed — this one figure tells the whole story from the raw packet log."""
+    lat = {g: ([], []) for g, _ in GROUPS}   # latency: (times, ms)
+    seqs = {g: [] for g, _ in GROUPS}        # loss:    [(time, seq), ...]
+    times = []
+    for r in rows:
+        t = _to_float(r.get("time"))
+        if t is None:
+            continue
+        times.append(t)
+        if r.get("crc_ok") == "1":
+            l = _to_float(r.get("latency_ms"))
+            if l is not None:
+                if r.get("path") == "1":
+                    lat["Wi-Fi"][0].append(t); lat["Wi-Fi"][1].append(l)
+                elif r.get("path") == "2":
+                    lat["5G/LTE"][0].append(t); lat["5G/LTE"][1].append(l)
+                if r.get("is_duplicate") == "0":
+                    lat["Merged"][0].append(t); lat["Merged"][1].append(l)
+        s = _to_float(r.get("seq"))
+        if s is not None:
+            s = int(s)
+            if r.get("path") == "1":
+                seqs["Wi-Fi"].append((t, s))
+            elif r.get("path") == "2":
+                seqs["5G/LTE"].append((t, s))
+            if r.get("is_duplicate") == "0":
+                seqs["Merged"].append((t, s))
+
+    if not times:
+        print(f"[skip timeline] {name}: no samples")
+        return
+    # 'time' counts from receiver start, not test start, so shift to begin at 0.
+    t0 = min(times)
+
+    def loss_series(pairs, bin_s=1.0):
+        bins = {}
+        for t, s in pairs:
+            bins.setdefault(int((t - t0) // bin_s), set()).add(s)
+        xs, ys = [], []
+        for b in sorted(bins):
+            ss = bins[b]
+            span = max(ss) - min(ss) + 1
+            xs.append(b * bin_s)
+            ys.append(100.0 * (span - len(ss)) / span if span > 0 else 0.0)
+        return np.array(xs), np.array(ys)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+    for g, color in GROUPS:
+        t, l = lat[g]
+        if t:
+            order = np.argsort(t)
+            ax1.plot(np.asarray(t)[order] - t0, np.asarray(l)[order],
+                     color=color, linewidth=0.7, label=g)
+    for g, color in GROUPS:
+        if seqs[g]:
+            x, y = loss_series(seqs[g])
+            ax2.plot(x, y, color=color, linewidth=0.9, label=g)
+    ax1.set_ylabel("Latency [ms]")
+    ax2.set_ylabel("Loss [%]")
+    ax2.set_xlabel("Time [s]")
+    ax1.set_title(f"Per-packet latency and loss over time — {name}")
+    ax1.legend()
+    ax1.grid(alpha=0.3)
+    ax2.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_timeline.pdf", dpi=150)
+    plt.close(fig)
+    print(f"  timeline -> {out / (name + '_timeline.pdf')}")
+
+
 def analyse_file(csv_path: Path, out: Path):
     rows = load_rows(csv_path)
     if not rows:
@@ -215,7 +278,7 @@ def analyse_file(csv_path: Path, out: Path):
     counts = path_counts(rows)
     write_stats(groups, counts, out, name)
     write_latex(groups, counts, out, name)
-    plot_boxplot(groups, out, name)
+    plot_timeline(rows, out, name)
 
 
 def collect(inputs):

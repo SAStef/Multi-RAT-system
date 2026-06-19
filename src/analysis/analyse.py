@@ -183,9 +183,11 @@ def analyse_file(csv_path: Path, out: Path):
     name = csv_path.stem
     print(f"\n--- {csv_path} ({len(df)} seconds) ---")
     write_summary(df, out, name)
-    plot_cdf(df, out, name)
-    plot_hist(df, out, name)
-    plot_timeseries(df, out, name)
+    # The over-time latency+loss figure now comes from raw_stats.py (per-packet,
+    # one combined plot), so the per-second plots here are intentionally not
+    # called — plot_cdf/plot_hist/plot_timeseries are kept below only in case
+    # they are wanted again later. analyse.py now contributes the summary plus
+    # the long-capture clock-drift fit.
     plot_drift(df, out, name)
 
 
