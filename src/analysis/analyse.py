@@ -34,6 +34,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+import _style
+_style.apply()
+
 STREAMS = [("p1", "Wi-Fi"), ("p2", "5G/LTE"), ("m", "Merged")]
 COLORS = {"p1": "#1E88E5", "p2": "#FB8C00", "m": "#43A047"}
 DRIFT_MIN_SECONDS = 30 * 60

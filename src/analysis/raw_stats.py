@@ -38,7 +38,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-GROUPS = [("Wi-Fi", "#1E88E5"), ("5G/LTE", "#FB8C00"), ("Merged", "#43A047")]
+import _style
+_style.apply()
+
+GROUPS = [(name, _style.STREAM_COLORS[name]) for name in ("Wi-Fi", "5G/LTE", "Merged")]
 STAT_COLS = ("count", "mean", "std", "min", "p5", "q1",
              "median", "q3", "p95", "max")
 
@@ -173,22 +176,64 @@ def plot_boxplot(groups, out: Path, name: str):
         print(f"[skip boxplot] {name}: no valid latency samples")
         return
     fig, ax = plt.subplots(figsize=(6, 4))
-    bp = ax.boxplot(data, showfliers=True, patch_artist=True,
-                    medianprops=dict(color="black", linewidth=1.4),
-                    flierprops=dict(marker="o", markersize=3, alpha=0.4))
+    bp = ax.boxplot(data, showfliers=True, patch_artist=True, widths=0.6,
+                    medianprops=dict(color="black", linewidth=1.6),
+                    whiskerprops=dict(color="0.4"),
+                    capprops=dict(color="0.4"),
+                    flierprops=dict(marker="o", markersize=3, alpha=0.35,
+                                    markerfacecolor="0.5", markeredgecolor="none"))
     ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
-        patch.set_alpha(0.55)
+        patch.set_alpha(0.6)
+        patch.set_edgecolor(color)
     ax.set_ylabel("Latency [ms]")
-    ax.set_title(f"Per-packet latency distribution — {name}")
-    ax.grid(axis="y", alpha=0.3)
+    ax.set_title(f"Latency distribution — {name}")
+    ax.grid(axis="x", visible=False)
     fig.tight_layout()
-    for ext in ("pdf", "png"):
-        fig.savefig(out / f"{name}_latency_boxplot.{ext}", dpi=150)
+    fig.savefig(out / f"{name}_latency_boxplot.pdf")
     plt.close(fig)
     print(f"  boxplot -> {out / (name + '_latency_boxplot.pdf')}")
+
+
+def plot_cdf(groups, out: Path, name: str):
+    if not any(groups[g].size for g, _ in GROUPS):
+        print(f"[skip cdf] {name}: no valid latency samples")
+        return
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for g, color in GROUPS:
+        x = np.sort(groups[g])
+        if x.size:
+            ax.plot(x, np.arange(1, x.size + 1) / x.size, color=color, label=g)
+    ax.set_xlabel("Latency [ms]")
+    ax.set_ylabel("CDF")
+    ax.set_ylim(0, 1)
+    ax.set_title(f"Latency CDF — {name}")
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_latency_cdf.pdf")
+    plt.close(fig)
+    print(f"  cdf -> {out / (name + '_latency_cdf.pdf')}")
+
+
+def plot_hist(groups, out: Path, name: str):
+    if not any(groups[g].size for g, _ in GROUPS):
+        print(f"[skip hist] {name}: no valid latency samples")
+        return
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for g, color in GROUPS:
+        x = groups[g]
+        if x.size:
+            ax.hist(x, bins=40, alpha=0.5, color=color, label=g, edgecolor="none")
+    ax.set_xlabel("Latency [ms]")
+    ax.set_ylabel("Packets")
+    ax.set_title(f"Latency histogram — {name}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_latency_hist.pdf")
+    plt.close(fig)
+    print(f"  hist -> {out / (name + '_latency_hist.pdf')}")
 
 
 def plot_timeline(rows, out: Path, name: str):
@@ -244,26 +289,37 @@ def plot_timeline(rows, out: Path, name: str):
             ys.append(100.0 * (span - len(ss)) / span if span > 0 else 0.0)
         return np.array(xs), np.array(ys)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+    def break_gaps(x, y, max_dt):
+        """Insert NaNs where samples are >max_dt apart so the line is not drawn
+        across pauses (when the sender was stopped) — no misleading diagonals."""
+        x = np.asarray(x, float); y = np.asarray(y, float)
+        if x.size < 2:
+            return x, y
+        for i in np.where(np.diff(x) > max_dt)[0][::-1]:
+            x = np.insert(x, i + 1, np.nan)
+            y = np.insert(y, i + 1, np.nan)
+        return x, y
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
     for g, color in GROUPS:
         t, l = lat[g]
         if t:
             order = np.argsort(t)
-            ax1.plot(np.asarray(t)[order] - t0, np.asarray(l)[order],
-                     color=color, linewidth=0.7, label=g)
+            x, y = break_gaps(np.asarray(t)[order] - t0, np.asarray(l)[order], 1.0)
+            ax1.plot(x, y, color=color, linewidth=0.8, label=g)
     for g, color in GROUPS:
         if seqs[g]:
             x, y = loss_series(seqs[g])
-            ax2.plot(x, y, color=color, linewidth=0.9, label=g)
+            x, y = break_gaps(x, y, 2.0)
+            ax2.plot(x, y, color=color, linewidth=1.2, label=g)
     ax1.set_ylabel("Latency [ms]")
     ax2.set_ylabel("Loss [%]")
     ax2.set_xlabel("Time [s]")
-    ax1.set_title(f"Per-packet latency and loss over time — {name}")
-    ax1.legend()
-    ax1.grid(alpha=0.3)
-    ax2.grid(alpha=0.3)
+    ax2.set_ylim(bottom=0)
+    ax1.set_title(f"Latency and loss over time — {name}")
+    ax1.legend(loc="upper right", ncol=3)
     fig.tight_layout()
-    fig.savefig(out / f"{name}_timeline.pdf", dpi=150)
+    fig.savefig(out / f"{name}_timeline.pdf")
     plt.close(fig)
     print(f"  timeline -> {out / (name + '_timeline.pdf')}")
 
@@ -279,6 +335,9 @@ def analyse_file(csv_path: Path, out: Path):
     write_stats(groups, counts, out, name)
     write_latex(groups, counts, out, name)
     plot_timeline(rows, out, name)
+    plot_boxplot(groups, out, name)
+    plot_cdf(groups, out, name)
+    plot_hist(groups, out, name)
 
 
 def collect(inputs):
