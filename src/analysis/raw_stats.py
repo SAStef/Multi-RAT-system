@@ -31,6 +31,7 @@ Usage:
 import argparse
 import csv
 import sys
+from collections import Counter
 from pathlib import Path
 
 import matplotlib
@@ -122,8 +123,21 @@ def path_counts(rows):
 
 
 def write_stats(groups, counts, out: Path, name: str):
-    # Echo a readable table to the console only; the report-ready table is the
-    # .tex file written by write_latex (the separate .csv dump was redundant).
+    path = out / f"{name}_latency_stats.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["stream", *STAT_COLS])
+        for g, _ in GROUPS:
+            d = describe(groups[g])
+            w.writerow([g] + [d[c] if c == "count" else round(d[c], 3) for c in STAT_COLS])
+        w.writerow([])
+        w.writerow(["path", "arrived", "lost", "loss_pct", "duplicates", "crc_errors"])
+        for p in ("1", "2"):
+            c = counts[p]
+            w.writerow([p, c["arrived"], c["lost"], round(c["loss_pct"], 3),
+                        c["duplicates"], c["crc_errors"]])
+
+    # also echo a readable table to the console
     print(f"\n--- {name} ---")
     print(f"{'stream':<8}{'n':>7}{'mean':>9}{'median':>9}{'p95':>9}{'std':>9}  [ms]")
     for g, _ in GROUPS:
@@ -137,6 +151,7 @@ def write_stats(groups, counts, out: Path, name: str):
         c = counts[p]
         print(f"  path {p}: arrived={c['arrived']} lost={c['lost']} "
               f"({c['loss_pct']:.2f}%) dupes={c['duplicates']} crc_err={c['crc_errors']}")
+    print(f"  stats table -> {path}")
 
 
 def write_latex(groups, counts, out: Path, name: str):
@@ -166,6 +181,18 @@ def write_latex(groups, counts, out: Path, name: str):
     )
     (out / f"{name}_latency_stats.tex").write_text(tex)
     print(f"  LaTeX table -> {out / (name + '_latency_stats.tex')}")
+
+
+def robust_limits(arrays, lo_pct=0.0, hi_pct=99.0, pad_frac=0.05):
+    """A (lo, hi) range that ignores extreme clock-offset spikes, so the bulk of
+    the data fills the axis instead of being squashed against one edge."""
+    allv = np.concatenate([np.asarray(a) for a in arrays if len(a)])
+    if allv.size == 0:
+        return None
+    lo = np.percentile(allv, lo_pct)
+    hi = np.percentile(allv, hi_pct)
+    pad = max((hi - lo) * pad_frac, 0.5)
+    return lo - pad, hi + pad
 
 
 def plot_boxplot(groups, out: Path, name: str):
@@ -209,6 +236,11 @@ def plot_cdf(groups, out: Path, name: str):
     ax.set_xlabel("Latency [ms]")
     ax.set_ylabel("CDF")
     ax.set_ylim(0, 1)
+    # Zoom x to the bulk (to p99.5) so the curves separate instead of being
+    # squashed left by a few clock-offset spikes that drag the axis to >1200 ms.
+    lim = robust_limits([groups[g] for g, _ in GROUPS], hi_pct=99.5)
+    if lim:
+        ax.set_xlim(*lim)
     ax.set_title(f"Latency CDF — {name}")
     ax.legend(loc="lower right")
     fig.tight_layout()
@@ -221,13 +253,19 @@ def plot_hist(groups, out: Path, name: str):
     if not any(groups[g].size for g, _ in GROUPS):
         print(f"[skip hist] {name}: no valid latency samples")
         return
+    # Bin only within the bulk (to p99) so a handful of clock-offset spikes do
+    # not spread the bins across a near-empty 900–1250 ms axis.
+    lim = robust_limits([groups[g] for g, _ in GROUPS], hi_pct=99.0)
     fig, ax = plt.subplots(figsize=(6, 4))
     for g, color in GROUPS:
         x = groups[g]
         if x.size:
-            ax.hist(x, bins=40, alpha=0.5, color=color, label=g, edgecolor="none")
+            ax.hist(x, bins=40, range=lim, alpha=0.5, color=color, label=g,
+                    edgecolor="none")
     ax.set_xlabel("Latency [ms]")
     ax.set_ylabel("Packets")
+    if lim:
+        ax.set_xlim(*lim)
     ax.set_title(f"Latency histogram — {name}")
     ax.legend(loc="upper right")
     fig.tight_layout()
@@ -316,6 +354,11 @@ def plot_timeline(rows, out: Path, name: str):
     ax2.set_ylabel("Loss [%]")
     ax2.set_xlabel("Time [s]")
     ax2.set_ylim(bottom=0)
+    # Clip the latency axis to the bulk (to p99.5) so a few clock-offset spikes
+    # do not compress the interesting variation against the bottom.
+    lim = robust_limits([lat[g][1] for g, _ in GROUPS], hi_pct=99.5)
+    if lim:
+        ax1.set_ylim(*lim)
     ax1.set_title(f"Latency and loss over time — {name}")
     ax1.legend(loc="upper right", ncol=3)
     fig.tight_layout()
@@ -324,7 +367,95 @@ def plot_timeline(rows, out: Path, name: str):
     print(f"  timeline -> {out / (name + '_timeline.pdf')}")
 
 
-def analyse_file(csv_path: Path, out: Path):
+def paired_by_seq(rows):
+    """For the dominant session, pair the two copies of each packet.
+
+    Returns a list of (seq, lat_wifi, lat_5g) sorted by seq, for packets where
+    BOTH paths delivered a valid (crc_ok) copy — the input for the per-packet
+    latency stem and the differential-delay plots."""
+    sess = Counter(r.get("session_id") for r in rows if r.get("crc_ok") == "1")
+    if not sess:
+        return []
+    sid = sess.most_common(1)[0][0]
+    lat = {1: {}, 2: {}}
+    for r in rows:
+        if r.get("session_id") != sid or r.get("crc_ok") != "1":
+            continue
+        p = r.get("path")
+        seq = _to_float(r.get("seq"))
+        l = _to_float(r.get("latency_ms"))
+        if p in ("1", "2") and seq is not None and l is not None:
+            lat[int(p)].setdefault(int(seq), l)  # first copy per path
+    common = sorted(set(lat[1]) & set(lat[2]))
+    return [(s, lat[1][s], lat[2][s]) for s in common]
+
+
+def _style_stem(container, color, markersize=5):
+    markerline, stemlines, baseline = container
+    plt.setp(markerline, color=color, markersize=markersize, markerfacecolor="none")
+    plt.setp(stemlines, color=color, linewidth=1.0)
+    plt.setp(baseline, visible=False)
+
+
+def plot_latency_stem(rows, out: Path, name: str, window: int):
+    """Per-packet latency as a stem plot for Wi-Fi and 5G/LTE side by side,
+    x = packet number — the left figure on the project poster."""
+    paired = paired_by_seq(rows)[:window]
+    if not paired:
+        print(f"[skip latency-stem] {name}: no packets seen on both paths")
+        return
+    x = np.arange(1, len(paired) + 1)
+    l1 = [a for _, a, _ in paired]
+    l2 = [b for _, _, b in paired]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    _style_stem(ax.stem(x - 0.15, l1, basefmt=" "), _style.STREAM_COLORS["Wi-Fi"])
+    _style_stem(ax.stem(x + 0.15, l2, basefmt=" "), _style.STREAM_COLORS["5G/LTE"])
+    ax.plot([], [], "o-", color=_style.STREAM_COLORS["Wi-Fi"],
+            markerfacecolor="none", label="Stream 1 (Wi-Fi)")
+    ax.plot([], [], "o-", color=_style.STREAM_COLORS["5G/LTE"],
+            markerfacecolor="none", label="Stream 2 (5G/LTE)")
+    ax.set_xlabel("Packet number [-]")
+    ax.set_ylabel("Latency [ms]")
+    # Latency is dominated by a constant phone<->server clock offset, so zoom the
+    # y-axis to the data range; otherwise every stem looks the same height and
+    # the per-packet variation (the point of this plot) is invisible.
+    lo, hi = min(l1 + l2), max(l1 + l2)
+    pad = max((hi - lo) * 0.1, 1.0)
+    ax.set_ylim(lo - pad, hi + pad)
+    ax.set_title(f"Per-packet latency — {name}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_latency_stem.pdf")
+    plt.close(fig)
+    print(f"  latency-stem -> {out / (name + '_latency_stem.pdf')}")
+
+
+def plot_diffdelay_stem(rows, out: Path, name: str, window: int):
+    """Differential delay |latency_WiFi - latency_5G| per packet as a stem plot
+    — the right figure on the project poster. Quantifies how far the two paths
+    are out of sync, the key skew metric for 1+1 protection."""
+    paired = paired_by_seq(rows)[:window]
+    if not paired:
+        print(f"[skip diff-delay] {name}: no packets seen on both paths")
+        return
+    x = np.arange(1, len(paired) + 1)
+    dd = [abs(a - b) for _, a, b in paired]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    _style_stem(ax.stem(x, dd, basefmt=" "), "#5E35B1")
+    ax.plot([], [], "o-", color="#5E35B1", markerfacecolor="none",
+            label="Wi-Fi vs 5G/LTE differential delay")
+    ax.set_xlabel("Packet number [-]")
+    ax.set_ylabel("Differential delay [ms]")
+    ax.set_ylim(bottom=0)
+    ax.set_title(f"Inter-path differential delay — {name}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_diffdelay_stem.pdf")
+    plt.close(fig)
+    print(f"  diff-delay -> {out / (name + '_diffdelay_stem.pdf')}")
+
+
+def analyse_file(csv_path: Path, out: Path, window: int = 40):
     rows = load_rows(csv_path)
     if not rows:
         print(f"[skip] {csv_path} is empty")
@@ -338,6 +469,8 @@ def analyse_file(csv_path: Path, out: Path):
     plot_boxplot(groups, out, name)
     plot_cdf(groups, out, name)
     plot_hist(groups, out, name)
+    plot_latency_stem(rows, out, name, window)
+    plot_diffdelay_stem(rows, out, name, window)
 
 
 def collect(inputs):
@@ -356,6 +489,8 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("inputs", nargs="+", help="packets_*.csv files or directories")
     ap.add_argument("--out", default="figures", help="output directory (default: figures/)")
+    ap.add_argument("--window", type=int, default=40,
+                    help="how many packets to show in the per-packet stem plots (default: 40)")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -364,7 +499,7 @@ def main():
     if not files:
         sys.exit("no packets_*.csv files found")
     for f in files:
-        analyse_file(f, out)
+        analyse_file(f, out, args.window)
     print(f"\nWritten to {out.resolve()}")
 
 
