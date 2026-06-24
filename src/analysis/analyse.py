@@ -103,56 +103,6 @@ def write_summary(df: pd.DataFrame, out: Path, name: str):
     print(text)
 
 
-def plot_cdf(df: pd.DataFrame, out: Path, name: str):
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for key, label in STREAMS:
-        x = df[f"{key}_latency"].dropna().sort_values().to_numpy()
-        if len(x):
-            ax.plot(x, np.arange(1, len(x) + 1) / len(x),
-                    label=label, color=COLORS[key])
-    ax.set_xlabel("Latency [ms]")
-    ax.set_ylabel("CDF")
-    ax.legend()
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out / f"{name}_latency_cdf.pdf")
-    plt.close(fig)
-
-
-def plot_hist(df: pd.DataFrame, out: Path, name: str):
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for key, label in STREAMS:
-        x = df[f"{key}_latency"].dropna()
-        if len(x):
-            ax.hist(x, bins=40, alpha=0.5, label=label, color=COLORS[key])
-    ax.set_xlabel("Latency [ms]")
-    ax.set_ylabel("Seconds")
-    ax.legend()
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out / f"{name}_latency_hist.pdf")
-    plt.close(fig)
-
-
-def plot_timeseries(df: pd.DataFrame, out: Path, name: str):
-    t = (df["utc"] - df["utc"].iloc[0]).dt.total_seconds()
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
-    for key, label in STREAMS:
-        ax1.plot(t, df[f"{key}_latency"], label=label,
-                 color=COLORS[key], linewidth=0.9)
-        ax2.plot(t, df[f"{key}_loss"], label=label,
-                 color=COLORS[key], linewidth=0.9)
-    ax1.set_ylabel("Latency [ms]")
-    ax2.set_ylabel("Loss [%]")
-    ax2.set_xlabel("Time [s]")
-    ax1.legend()
-    ax1.grid(alpha=0.3)
-    ax2.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out / f"{name}_timeseries.pdf")
-    plt.close(fig)
-
-
 def plot_drift(df: pd.DataFrame, out: Path, name: str):
     """Linear fit of merged latency over time; the slope estimates clock drift."""
     t = (df["utc"] - df["utc"].iloc[0]).dt.total_seconds()
@@ -186,11 +136,6 @@ def analyse_file(csv_path: Path, out: Path):
     name = csv_path.stem
     print(f"\n--- {csv_path} ({len(df)} seconds) ---")
     write_summary(df, out, name)
-    # The over-time latency+loss figure now comes from raw_stats.py (per-packet,
-    # one combined plot), so the per-second plots here are intentionally not
-    # called — plot_cdf/plot_hist/plot_timeseries are kept below only in case
-    # they are wanted again later. analyse.py now contributes the summary plus
-    # the long-capture clock-drift fit.
     plot_drift(df, out, name)
 
 

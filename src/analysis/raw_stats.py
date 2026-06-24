@@ -16,6 +16,7 @@ _style.apply()
 GROUPS = [(name, _style.STREAM_COLORS[name]) for name in ("Wi-Fi", "5G/LTE", "Merged")]
 STAT_COLS = ("count", "mean", "std", "min", "p5", "q1",
              "median", "q3", "p95", "max")
+PAYLOAD_BYTES = 32   # fixed application payload, same as the sender
 
 
 def load_rows(csv_path: Path):
@@ -227,8 +228,8 @@ def plot_hist(groups, out: Path, name: str):
     for g, color in GROUPS:
         x = groups[g]
         if x.size:
-            ax.hist(x, bins=40, range=lim, alpha=0.5, color=color, label=g,
-                    edgecolor="none")
+            ax.hist(x, bins=40, range=lim, histtype="step", linewidth=1.8,
+                    color=color, label=g)
     ax.set_xlabel("Latency [ms]")
     ax.set_ylabel("Packets")
     if lim:
@@ -628,6 +629,180 @@ def write_throughput(rows, out: Path, name: str, bin_s: float = 1.0):
     print(f"  throughput -> {path}")
 
 
+def _jitter_arrays(rows):
+    # abs latency change between consecutive packets per stream (IPDV)
+    tmp = {g: [] for g, _ in GROUPS}
+    for r in rows:
+        if r.get("crc_ok") != "1":
+            continue
+        l = _to_float(r.get("latency_ms"))
+        seq = _to_float(r.get("seq"))
+        if l is None or seq is None:
+            continue
+        p = r.get("path")
+        if p == "1":
+            tmp["Wi-Fi"].append((int(seq), l))
+        elif p == "2":
+            tmp["5G/LTE"].append((int(seq), l))
+        if r.get("is_duplicate") == "0":
+            tmp["Merged"].append((int(seq), l))
+    out = {}
+    for g, _ in GROUPS:
+        ls = [l for _, l in sorted(tmp[g], key=lambda x: x[0])]
+        out[g] = np.abs(np.diff(ls)) if len(ls) > 1 else np.array([])
+    return out
+
+
+def _throughput_arrays(rows, bin_s=1.0):
+    # per-second throughput in kbps per stream, payload bytes only (eq. 8B/1000dt)
+    t0 = _t0(rows)
+    streams = {g: Counter() for g, _ in GROUPS}
+    for r in rows:
+        if r.get("crc_ok") != "1":
+            continue
+        t = _to_float(r.get("time"))
+        if t is None:
+            continue
+        b = int((t - t0) // bin_s)
+        p = r.get("path")
+        if p == "1":
+            streams["Wi-Fi"][b] += 1
+        elif p == "2":
+            streams["5G/LTE"][b] += 1
+        if r.get("is_duplicate") == "0":
+            streams["Merged"][b] += 1
+    return {g: np.array([c * PAYLOAD_BYTES * 8 / (1000 * bin_s)
+                         for c in streams[g].values()], float) for g, _ in GROUPS}
+
+
+def _merged_loss(rows):
+    # span-based loss for the deduplicated merged stream
+    seqs = {}
+    for r in rows:
+        if r.get("crc_ok") != "1" or r.get("is_duplicate") != "0":
+            continue
+        seq = _to_float(r.get("seq"))
+        if seq is None:
+            continue
+        seqs.setdefault(r.get("session_id"), set()).add(int(seq))
+    span = lost = 0
+    for s in seqs.values():
+        span += max(s) - min(s) + 1
+        lost += (max(s) - min(s) + 1) - len(s)
+    return 100.0 * lost / span if span else 0.0
+
+
+def _mean_std(a):
+    a = np.asarray(a, float)
+    if a.size == 0:
+        return float("nan"), float("nan")
+    if a.size == 1:
+        return float(a[0]), 0.0
+    return float(np.mean(a)), float(np.std(a, ddof=1))
+
+
+# the summary numbers for the report QoS table (mean +/- std + loss per stream)
+def write_report_table(rows, groups, counts, out: Path, name: str):
+    jit = _jitter_arrays(rows)
+    thr = _throughput_arrays(rows)
+    loss = {"Wi-Fi": counts["1"]["loss_pct"],
+            "5G/LTE": counts["2"]["loss_pct"],
+            "Merged": _merged_loss(rows)}
+    metrics = [
+        ("Mean latency", "ms", {g: _mean_std(groups[g]) for g, _ in GROUPS}),
+        ("Mean jitter", "ms", {g: _mean_std(jit[g]) for g, _ in GROUPS}),
+        ("Mean throughput", "kbps", {g: _mean_std(thr[g]) for g, _ in GROUPS}),
+    ]
+
+    csv_path = out / f"{name}_report_table.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["metric", "unit", "wifi_mean", "wifi_std",
+                    "lte_mean", "lte_std", "merged_mean", "merged_std"])
+        for mname, unit, vals in metrics:
+            row = [mname, unit]
+            for g, _ in GROUPS:
+                m, s = vals[g]
+                row += [round(m, 3), round(s, 3)]
+            w.writerow(row)
+        w.writerow(["Packet loss", "%", round(loss["Wi-Fi"], 3), "",
+                    round(loss["5G/LTE"], 3), "", round(loss["Merged"], 3), ""])
+    print(f"  report table csv -> {csv_path}")
+
+    def cell(g, vals):
+        m, s = vals[g]
+        return "--" if m != m else f"{m:.2f} $\\pm$ {s:.2f}"
+
+    lines = []
+    for mname, unit, vals in metrics:
+        lines.append(f"    {mname} & {cell('Wi-Fi', vals)} & {cell('5G/LTE', vals)} "
+                     f"& {cell('Merged', vals)} & {unit} \\\\")
+    lines.append(f"    Packet loss & {loss['Wi-Fi']:.2f} & {loss['5G/LTE']:.2f} "
+                 f"& {loss['Merged']:.2f} & \\% \\\\")
+    tex = (
+        "\\begin{table}[H]\n  \\centering\n"
+        "  \\caption{Per-path and merged Quality of Service.}\n"
+        "  \\label{tab:qos-summary}\n"
+        "  \\begin{tabular}{lcccc}\n    \\toprule\n"
+        "    Metric & Wi-Fi path 1 & LTE path 2 & Merged & Unit \\\\\n    \\midrule\n"
+        + "\n".join(lines) + "\n    \\bottomrule\n"
+        "  \\end{tabular}\n\\end{table}\n"
+    )
+    (out / f"{name}_report_table.tex").write_text(tex)
+    print(f"  report table tex -> {out / (name + '_report_table.tex')}")
+
+
+# same stem plot but per-packet jitter over time, Wi-Fi vs 5G/LTE
+def plot_jitter_stem_time(rows, out: Path, name: str, window: int):
+    t0 = _t0(rows)
+    raw = {"Wi-Fi": [], "5G/LTE": []}
+    for r in rows:
+        if r.get("crc_ok") != "1":
+            continue
+        l = _to_float(r.get("latency_ms"))
+        seq = _to_float(r.get("seq"))
+        t = _to_float(r.get("time"))
+        if l is None or seq is None or t is None:
+            continue
+        p = r.get("path")
+        if p == "1":
+            raw["Wi-Fi"].append((int(seq), t, l))
+        elif p == "2":
+            raw["5G/LTE"].append((int(seq), t, l))
+    series = {g: ([], []) for g in raw}
+    for g in raw:
+        prev = None
+        for seq, t, l in sorted(raw[g], key=lambda x: x[0]):
+            if prev is not None and len(series[g][0]) < window:
+                series[g][0].append(t - t0)
+                series[g][1].append(abs(l - prev))
+            prev = l
+    allv = series["Wi-Fi"][1] + series["5G/LTE"][1]
+    if not allv:
+        print(f"[skip jitter-stem-time] {name}: no samples")
+        return
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for g in ("Wi-Fi", "5G/LTE"):
+        t, j = series[g]
+        if t:
+            _style_stem(ax.stem(t, j, basefmt=" "), _style.STREAM_COLORS[g], fill=True)
+    ax.plot([], [], "o-", color=_style.STREAM_COLORS["Wi-Fi"],
+            markerfacecolor=_style.STREAM_COLORS["Wi-Fi"], markeredgecolor="white",
+            label="Stream 1 (Wi-Fi)")
+    ax.plot([], [], "o-", color=_style.STREAM_COLORS["5G/LTE"],
+            markerfacecolor=_style.STREAM_COLORS["5G/LTE"], markeredgecolor="white",
+            label="Stream 2 (5G/LTE)")
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Jitter [ms]")
+    ax.set_title(f"Per-packet jitter over time — {name}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_jitter_stem_time.pdf")
+    plt.close(fig)
+    print(f"  jitter-stem-time -> {out / (name + '_jitter_stem_time.pdf')}")
+
+
 # latency vs time for all three streams on one plot
 def plot_latency_time(rows, out: Path, name: str):
     t0 = _t0(rows)
@@ -733,12 +908,14 @@ def analyse_file(csv_path: Path, out: Path, window: int = 40):
     write_jitter(rows, out, name)
     write_interarrival(rows, out, name)
     write_throughput(rows, out, name)
+    write_report_table(rows, groups, counts, out, name)
     plot_timeline(rows, out, name)
     plot_boxplot(groups, out, name)
     plot_cdf(groups, out, name)
     plot_hist(groups, out, name)
     plot_latency_stem(rows, out, name, window)
     plot_latency_stem_time(rows, out, name, window)
+    plot_jitter_stem_time(rows, out, name, window)
     plot_latency_time(rows, out, name)
     plot_diffdelay_stem(rows, out, name, window)
 
