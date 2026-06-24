@@ -1,27 +1,39 @@
 # Multi-RAT — tests
 
-Test-sendere der koerer mod receiveren + dashboardet. Hver fil er en selvstaendig
+Test-sendere der koerer mod den 24/7 cloud-server. Hver fil er en selvstaendig
 test. Test-senderen erstatter telefonen som afsender, saa du behoever ikke appen.
+
+Server + receiver koerer hele tiden paa cloud-serveren (`34.32.45.194`, via pm2),
+saa du starter dem aldrig selv — du sender bare en test derhen og henter CSV'erne
+hjem. Wrapper-scripsene har serveren hardcodet (IP, bruger og SSH-noegle).
 
 ## Saadan koerer du
 
-1. **Terminal 1** — start server + receiver (i `src/WebAppExpress`):
-   ```
-   node server.js
-   ```
-   Aabn dashboardet i browseren.
+Foerst, eengang pr. terminal-session (saa du slipper passphrase ved hvert SSH/SCP-trin):
+```
+ssh-add ~/.ssh/id_ed25519
+```
 
-2. **Terminal 2** — koer en test (i denne mappe, `tests/`):
-   ```
-   python3 test_t1_degraded.py
-   ```
-   Koerer lokalt (127.0.0.1) som standard. Mod en server: `--ip <server-ip>`.
+**Python-test som afsender** — one-shot: sender, henter CSV, laver alle plots:
+```
+./run_test.sh test_t3_loss.py 60 --fresh
+```
+Skift testen ud med `test_t1_degraded.py` / `t2` / `t4` / `t5`. `--fresh` genstarter
+receiveren paa serveren foerst, saa CSV'en kun indeholder netop den test.
 
-3. Lad testen koere ~30-60 sek saa graferne fyldes, tag screenshot, og tryk
-   **q** + Enter (eller Ctrl-C) for at stoppe.
+**Telefonen som afsender** — ingen lokal python-sender:
+```
+./fetch_and_plot.sh --fresh      # FOER app'en starter (rydder CSV paa serveren)
+# ... koer app'en paa telefonen, stop den ...
+./fetch_and_plot.sh              # henter + laver alle plots
+```
 
-Under en koersel kan du styre manuelt: **1** = toggle Wi-Fi, **2** = toggle 5G,
-**q** = quit (tryk Enter efter).
+Plots + raa CSV-data ender i `src/analysis/figures/run_<timestamp>/`.
+
+Vil du styre en koersel manuelt, sender testene ogsaa direkte: `1` = toggle Wi-Fi,
+`2` = toggle 5G, `q` = quit (tryk Enter efter), eller koer en test selv mod
+serveren med `python3 test_t1_degraded.py --ip 34.32.45.194 --seconds 60` og hent
+bagefter med `./fetch_and_plot.sh` (uden `--fresh`).
 
 ## Filer
 

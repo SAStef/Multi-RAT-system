@@ -1,13 +1,3 @@
-/**
- * Multi-RAT Express Dashboard
- *
- * Automatically starts receiver.py as a subprocess, so you only need:
- *   node server.js          (terminal 1 — starts server + receiver)
- *   python3 Sender.py       (terminal 2 — sends packets)
- *
- * Open: http://34.32.45.194:3000
- */
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -31,16 +21,14 @@ let receiverState  = {
   lastExitedAt: null,
 };
 
-// ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-// ── Routes ────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// Metrics endpoint — called by receiver.py every second
+// receiver.py posts the metrics here every second, push them to the browser
 app.post('/metrics', (req, res) => {
   latestMetrics = req.body;
   latestMetricsAt = Date.now();
@@ -58,7 +46,6 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// ── Socket.IO ─────────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log(`[Dashboard] Browser connected  (id=${socket.id})`);
   if (latestMetrics) {
@@ -69,7 +56,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// ── Start receiver.py as a subprocess ────────────────────────────────────────
 const PORT = Number(process.env.PORT || 3000);
 httpServer.listen(PORT, () => {
   console.log(`Dashboard    → http://localhost:${PORT}`);
@@ -79,6 +65,7 @@ httpServer.listen(PORT, () => {
   let   currentReceiver = null;
   let   shuttingDown    = false;
 
+  // start receiver.py from the server and restart it if it dies
   function spawnReceiver() {
     if (shuttingDown) return;
     currentReceiver = spawn(python, [receiverPath], { stdio: 'inherit' });

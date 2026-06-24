@@ -1,13 +1,7 @@
-"""Shared matplotlib styling for the Multi-RAT report figures.
-
-Imported by both raw_stats.py and analyse.py so every figure has the same
-fonts, colours, grid and margins — i.e. one consistent, report-ready look.
-Call apply() once after `matplotlib.use("Agg")`.
-"""
-
+# shared plot style so all the figures look the same
 import matplotlib as mpl
 
-# One colour per stream, used identically in every figure.
+# one color per stream
 STREAM_COLORS = {"Wi-Fi": "#1E88E5", "5G/LTE": "#FB8C00", "Merged": "#43A047"}
 
 

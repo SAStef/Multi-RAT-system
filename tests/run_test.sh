@@ -61,9 +61,43 @@ sudo chown -R $SSH_USER "\$D"
 EOF
 scp -i "$SSH_KEY" "$SSH_USER@$SERVER_IP:/tmp/mr_fetch/*.csv" "$LOCAL_LOGS"/
 
-echo ">> Generating boxplot + stats table ..."
-python3 "$ANALYSIS/raw_stats.py" --out "$ANALYSIS/figures" "$LOCAL_LOGS"/
+# Pick THIS run's two CSVs = the ones with the newest timestamp in their name.
+# Filenames are *_YYYYMMDD_HHMMSS.csv, so a plain lexical sort is chronological.
+# We analyse ONLY these two files (not the whole logs/ dir), so older runs that
+# are still sitting in logs/ don't each get their own confusing set of figures.
+PKT="$(ls "$LOCAL_LOGS"/packets_*.csv 2>/dev/null | sort | tail -1 || true)"
+MET="$(ls "$LOCAL_LOGS"/metrics_*.csv 2>/dev/null | sort | tail -1 || true)"
+if [ -z "$PKT" ] && [ -z "$MET" ]; then
+  echo "!! No CSVs found in $LOCAL_LOGS — nothing to plot." >&2
+  exit 1
+fi
+
+# One figures subfolder per run, named after the run's timestamp, so each test's
+# outputs (plots + raw stats CSV) stay together and never mix with another run's.
+RUN_ID="$(basename "${PKT:-$MET}" .csv | sed -E 's/^(packets|metrics)_//')"
+FIG="$ANALYSIS/figures/run_$RUN_ID"
+mkdir -p "$FIG"
+echo ">> This run: $(basename "${PKT:-—}")  $(basename "${MET:-—}")"
+echo ">> Figures + data -> $FIG"
+
+if [ -n "$PKT" ]; then
+  echo ">> Per-packet plots + stats CSV (raw_stats.py) ..."
+  python3 "$ANALYSIS/raw_stats.py" --out "$FIG" "$PKT"
+fi
+
+# CDF / histogram / timeseries / summary need pandas + scipy from the analysis
+# venv (src/analysis/venv). Run them too if that venv exists; otherwise say how.
+VENV_PY="$ANALYSIS/venv/bin/python"
+if [ -n "$MET" ]; then
+  if [ -x "$VENV_PY" ]; then
+    echo ">> Summary + drift (analyse.py) ..."
+    "$VENV_PY" "$ANALYSIS/analyse.py" --out "$FIG" "$MET"
+  else
+    echo ">> Skipping analyse.py (no venv). To enable summary/drift:"
+    echo "     python3 -m venv $ANALYSIS/venv"
+    echo "     $ANALYSIS/venv/bin/pip install -r $ANALYSIS/requirements.txt"
+  fi
+fi
 
 echo
-echo ">> Done. Figures + tables in: $ANALYSIS/figures"
-echo "   (run analyse.py in the venv for CDF/histogram/timeseries as well)"
+echo ">> Done. Figures + raw CSV data for this run in: $FIG"

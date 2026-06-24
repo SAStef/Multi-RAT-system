@@ -1,24 +1,4 @@
-"""
-Multi-RAT receiver for the Android sender app.
-
-Receives UDP packets on:
-  - 6967: WiFi / path 1
-  - 6968: Cellular / path 2
-
-Packet format, matching Multi-RAT-Sender/NetworkClient.kt:
-  seq(I=4) | session(I=4) | ts_ns(Q=8) | path(B=1) | ttl(B=1) | crc16(H=2) | pad(x=1)
-
-The receiver posts one metrics snapshot per second to the Express dashboard,
-and sends the same snapshot back to the phone as a UDP datagram on both radio
-paths. The reply is addressed to the source ip:port observed on each path and
-sent from the same server socket the path arrives on, so it traverses the
-NAT/CGNAT mapping that the phone's own 20 pps stream keeps alive (an inbound
-HTTP connection to the phone would be blocked by CGNAT). Sending on both paths
-is deliberate 1+1 redundancy; the app deduplicates snapshots on their time field.
-It also tracks raw UDP packets, so tcpdump-visible packets still appear in the
-dashboard even if the packet format or CRC does not parse.
-"""
-
+# receiver for the two udp paths (wifi=6967, 5g=6968)
 import binascii
 import collections
 import csv
@@ -34,14 +14,12 @@ from datetime import datetime, timezone
 
 PORT1 = 6967
 PORT2 = 6968
-HDR_FMT = "!IIQBBHx"
+HDR_FMT = "!IIQBBHx"   # seq session ts_ns path ttl crc + 1 pad byte
 HDR_SIZE = struct.calcsize(HDR_FMT)
 FRER_WINDOW = 2000
 EXPRESS_URL = "http://localhost:3000/metrics"
-FEEDBACK_MAX_AGE = 5.0  # only reply to a path heard from this recently (seconds)
-PATH_SILENCE_RESET = 2.0  # a path silent longer than this is treated as deliberately
-                          # off (or dead); its loss baseline restarts on resume so the
-                          # outage gap is NOT counted as packet loss
+FEEDBACK_MAX_AGE = 5.0
+PATH_SILENCE_RESET = 2.0
 PATH_LABELS = {1: "WiFi", 2: "5G/LTE"}
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
@@ -109,6 +87,7 @@ _frer_set = set()
 
 
 def frer_is_duplicate(session_id: int, seq: int) -> bool:
+    # already seen this seq -> its a duplicate from the other path, drop it
     key = (session_id, seq)
     if key in _frer_set:
         return True
@@ -119,18 +98,9 @@ def frer_is_duplicate(session_id: int, seq: int) -> bool:
     return False
 
 
+# loss = how many seq numbers are missing in the min..max range
+# done this way so reordered packets dont get counted as loss
 def update_loss_tracking(m: dict, session_id: int, seq: int):
-    """Reordering-robust loss tracking.
-
-    The old method counted the gap between consecutive sequence numbers, which
-    double-counts losses when packets are reordered (e.g. an arrival order of
-    1, 3, 2, 4 was scored as two losses even though nothing was lost). Instead we
-    track only the span actually covered, [seq_min, seq_max], and how many
-    sequence numbers arrived inside it. The lost count is then
-    (seq_max - seq_min + 1) - seq_count, which is independent of arrival order.
-    The window resets whenever the session id changes (sender restart), because
-    the sequence numbering restarts from zero in a new session.
-    """
     if m["loss_session"] != session_id:
         m["loss_session"] = session_id
         m["seq_min"] = seq
@@ -145,7 +115,6 @@ def update_loss_tracking(m: dict, session_id: int, seq: int):
 
 
 def loss_from_tracking(m: dict):
-    """Return (expected, lost) from the reordering-robust tracking fields."""
     if m["seq_max"] is None:
         return 0, 0
     expected = m["seq_max"] - m["seq_min"] + 1
@@ -154,17 +123,11 @@ def loss_from_tracking(m: dict):
 
 
 def silence_reset(m: dict, now: float):
-    """Restart a stream's measurement baseline after a silent gap.
-
-    When a path is switched off (or dies) it stops sending, then resumes from a
-    much higher sequence number. Counting the skipped numbers as loss would be
-    wrong, because nothing was lost - the path was simply not measured. So if a
-    stream has been silent for longer than PATH_SILENCE_RESET, we drop its loss
-    span and latency baseline; the next packet starts a fresh measurement.
-    """
+    # if a path was turned off for a while, restart the counting so the
+    # gap while it was off isnt counted as packet loss
     if m["last_parsed"] is not None and now - m["last_parsed"] > PATH_SILENCE_RESET:
-        m["loss_session"] = None   # forces update_loss_tracking to re-seed from this packet
-        m["last_latency"] = None   # avoids a bogus jitter spike across the gap
+        m["loss_session"] = None
+        m["last_latency"] = None
     m["last_parsed"] = now
 
 
@@ -243,18 +206,14 @@ def receiver_thread(sock: socket.socket):
                     f"path={header_path} seq={seq} from={addr}"
                 )
 
+            # crc only covers the payload. if it fails the packet got
+            # corrupted on the way, it still arrived so its not a loss
             if crc16(payload) != cs:
                 with metrics_lock:
                     metrics[metric_path]["crc_errors"] += 1
-                    # A corrupted packet still physically arrived on this path, so it
-                    # is a corruption (crc_errors), not a loss. Register its sequence
-                    # number in the loss tracking so it is not also counted as a gap.
-                    # The CRC only covers the payload, so the header (and thus seq)
-                    # is still usable here.
                     update_loss_tracking(metrics[metric_path], session_id, seq)
                     bad_latency = max(0.0, (time.time_ns() - ts_ns) / 1_000_000)
                     bad_hops = sent_ttl - received_ttl if received_ttl is not None else None
-                    # crc_ok=0, is_duplicate left blank: corrupted packets are not deduplicated.
                     packet_logger.log(metric_path, session_id, seq, bad_latency, bad_hops, 0, "")
                 print(f"[{PATH_LABELS[metric_path]}] BAD CRC seq={seq} from={addr}")
                 continue
@@ -340,7 +299,6 @@ def snapshot_merged(m: dict):
         "loss": round(loss, 2),
         "received": m["received"],
         "lost": lost,
-        "hops": None,
     }
 
     m["bytes_window"] = 0
@@ -373,13 +331,6 @@ CSV_FIELDS = (["utc", "time"]
 
 
 class CsvLogger:
-    """Appends one row per snapshot to logs/metrics_<starttime>.csv.
-
-    One file per receiver run, created on the first snapshot that contains
-    traffic; idle seconds (no raw packets on either path) are skipped so the
-    24/7 server does not grow an endless file of zeros between experiments.
-    Line-buffered so rows survive a crash or restart.
-    """
 
     def __init__(self):
         self._writer = None
@@ -413,14 +364,6 @@ class CsvLogger:
 csv_logger = CsvLogger()
 
 
-# Per-packet raw log: one row per received packet, for offline statistics and
-# boxplots. The metrics CSV above only stores per-second averages, which hide
-# the within-second latency spread, so it is too coarse for a real distribution.
-# On by default so a test run produces raw data with no extra step; disable on
-# the 24/7 server with the environment variable MULTIRAT_PACKET_LOG=0. One file
-# per receiver run, created on the first packet; line-buffered so rows survive a
-# crash. Called inside metrics_lock, so the two receiver threads never interleave
-# a row.
 PACKET_LOG_ENABLED = os.environ.get("MULTIRAT_PACKET_LOG", "1") != "0"
 PACKET_FIELDS = ("utc", "time", "path", "session_id", "seq",
                  "latency_ms", "hops", "crc_ok", "is_duplicate")
@@ -459,13 +402,8 @@ packet_logger = PacketCsvLogger()
 
 
 def send_feedback(socks: dict, payload: dict):
-    """Send the snapshot back to the phone over both UDP paths.
-
-    The reply goes to the source address last observed on each path, through
-    the same server socket that path arrives on, so the source ip:port of the
-    reply exactly mirrors the phone's outgoing flow and passes the NAT/CGNAT.
-    Paths that have been silent for FEEDBACK_MAX_AGE seconds are skipped.
-    """
+    # reply on the same socket the path came in on, otherwise the phones
+    # nat blocks it
     body = json.dumps(payload).encode("utf-8")
     now = time.time()
     with metrics_lock:

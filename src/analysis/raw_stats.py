@@ -1,33 +1,4 @@
-#!/usr/bin/env python3
-"""
-Per-packet statistics and boxplots from the raw packet logs (packets_*.csv)
-written by receiver.py.
-
-Where analyse.py works on the per-second metrics CSV (averages), this script
-works on the raw per-packet samples, which is what you need for honest
-distribution statistics and boxplots: every packet is one data point, so the
-within-second spread is preserved.
-
-For each input it writes, into the output directory:
-  - <name>_latency_stats.csv   count, mean, std, min, p5, q1, median, q3, p95,
-                               max of latency for Wi-Fi, 5G/LTE and the merged
-                               stream, plus per-path loss / duplicate / CRC counts
-  - <name>_latency_stats.tex   the same latency summary as a report-ready booktabs
-                               table (\\input it straight into the report)
-  - <name>_latency_boxplot.pdf the three latency distributions as boxplots
-  - <name>_latency_boxplot.png the same, for quick sharing
-
-Latency groups:
-  Wi-Fi   = valid packets received on path 1
-  5G/LTE  = valid packets received on path 2
-  Merged  = valid packets that survived PREOF (the first copy of each
-            (session, seq); is_duplicate == 0) — the deduplicated output stream
-
-Usage:
-    python3 raw_stats.py <packets-csv-or-directory> [more ...]
-    python3 raw_stats.py --out figures/ ../WebAppExpress/logs/
-"""
-
+# makes the stats and boxplots from the raw packet logs (packets_*.csv)
 import argparse
 import csv
 import sys
@@ -60,7 +31,6 @@ def _to_float(s):
 
 
 def latency_groups(rows):
-    """Return {group: np.array of latency_ms} for the three streams."""
     out = {name: [] for name, _ in GROUPS}
     for r in rows:
         if r.get("crc_ok") != "1":
@@ -95,7 +65,6 @@ def describe(x: np.ndarray):
 
 
 def path_counts(rows):
-    """Per-path packet counts: arrived, lost (seq-span method), duplicates, CRC errors."""
     summary = {}
     for p in ("1", "2"):
         prows = [r for r in rows if r.get("path") == p]
@@ -137,7 +106,7 @@ def write_stats(groups, counts, out: Path, name: str):
             w.writerow([p, c["arrived"], c["lost"], round(c["loss_pct"], 3),
                         c["duplicates"], c["crc_errors"]])
 
-    # also echo a readable table to the console
+
     print(f"\n--- {name} ---")
     print(f"{'stream':<8}{'n':>7}{'mean':>9}{'median':>9}{'p95':>9}{'std':>9}  [ms]")
     for g, _ in GROUPS:
@@ -155,7 +124,6 @@ def write_stats(groups, counts, out: Path, name: str):
 
 
 def write_latex(groups, counts, out: Path, name: str):
-    """Report-ready booktabs table -> <name>_latency_stats.tex (\\input it directly)."""
     label = name.replace(".", "_")
     rows = []
     for g, _ in GROUPS:
@@ -183,9 +151,8 @@ def write_latex(groups, counts, out: Path, name: str):
     print(f"  LaTeX table -> {out / (name + '_latency_stats.tex')}")
 
 
+# cut off the few huge clock-offset spikes so the plots arent squished
 def robust_limits(arrays, lo_pct=0.0, hi_pct=99.0, pad_frac=0.05):
-    """A (lo, hi) range that ignores extreme clock-offset spikes, so the bulk of
-    the data fills the axis instead of being squashed against one edge."""
     allv = np.concatenate([np.asarray(a) for a in arrays if len(a)])
     if allv.size == 0:
         return None
@@ -236,8 +203,8 @@ def plot_cdf(groups, out: Path, name: str):
     ax.set_xlabel("Latency [ms]")
     ax.set_ylabel("CDF")
     ax.set_ylim(0, 1)
-    # Zoom x to the bulk (to p99.5) so the curves separate instead of being
-    # squashed left by a few clock-offset spikes that drag the axis to >1200 ms.
+
+
     lim = robust_limits([groups[g] for g, _ in GROUPS], hi_pct=99.5)
     if lim:
         ax.set_xlim(*lim)
@@ -253,8 +220,8 @@ def plot_hist(groups, out: Path, name: str):
     if not any(groups[g].size for g, _ in GROUPS):
         print(f"[skip hist] {name}: no valid latency samples")
         return
-    # Bin only within the bulk (to p99) so a handful of clock-offset spikes do
-    # not spread the bins across a near-empty 900–1250 ms axis.
+
+
     lim = robust_limits([groups[g] for g, _ in GROUPS], hi_pct=99.0)
     fig, ax = plt.subplots(figsize=(6, 4))
     for g, color in GROUPS:
@@ -275,15 +242,8 @@ def plot_hist(groups, out: Path, name: str):
 
 
 def plot_timeline(rows, out: Path, name: str):
-    """Single over-time figure with time always on the x-axis: per-packet
-    latency on top, per-second loss on the bottom, one line per stream.
-
-    Latency uses valid (crc_ok) packets. Loss is derived per 1-second bin from
-    the sequence numbers (span method: a gap between min/max seq in a bin that
-    is not filled by an arrival is a loss), so no per-second metrics CSV is
-    needed — this one figure tells the whole story from the raw packet log."""
-    lat = {g: ([], []) for g, _ in GROUPS}   # latency: (times, ms)
-    seqs = {g: [] for g, _ in GROUPS}        # loss:    [(time, seq), ...]
+    lat = {g: ([], []) for g, _ in GROUPS}
+    seqs = {g: [] for g, _ in GROUPS}
     times = []
     for r in rows:
         t = _to_float(r.get("time"))
@@ -312,7 +272,7 @@ def plot_timeline(rows, out: Path, name: str):
     if not times:
         print(f"[skip timeline] {name}: no samples")
         return
-    # 'time' counts from receiver start, not test start, so shift to begin at 0.
+
     t0 = min(times)
 
     def loss_series(pairs, bin_s=1.0):
@@ -328,8 +288,7 @@ def plot_timeline(rows, out: Path, name: str):
         return np.array(xs), np.array(ys)
 
     def break_gaps(x, y, max_dt):
-        """Insert NaNs where samples are >max_dt apart so the line is not drawn
-        across pauses (when the sender was stopped) — no misleading diagonals."""
+        # put a nan where the sender was stopped so the line isnt drawn over the gap
         x = np.asarray(x, float); y = np.asarray(y, float)
         if x.size < 2:
             return x, y
@@ -354,8 +313,8 @@ def plot_timeline(rows, out: Path, name: str):
     ax2.set_ylabel("Loss [%]")
     ax2.set_xlabel("Time [s]")
     ax2.set_ylim(bottom=0)
-    # Clip the latency axis to the bulk (to p99.5) so a few clock-offset spikes
-    # do not compress the interesting variation against the bottom.
+
+
     lim = robust_limits([lat[g][1] for g, _ in GROUPS], hi_pct=99.5)
     if lim:
         ax1.set_ylim(*lim)
@@ -367,12 +326,8 @@ def plot_timeline(rows, out: Path, name: str):
     print(f"  timeline -> {out / (name + '_timeline.pdf')}")
 
 
+# find packets that arrived on both paths so we can compare the two latencies
 def paired_by_seq(rows):
-    """For the dominant session, pair the two copies of each packet.
-
-    Returns a list of (seq, lat_wifi, lat_5g) sorted by seq, for packets where
-    BOTH paths delivered a valid (crc_ok) copy — the input for the per-packet
-    latency stem and the differential-delay plots."""
     sess = Counter(r.get("session_id") for r in rows if r.get("crc_ok") == "1")
     if not sess:
         return []
@@ -385,7 +340,7 @@ def paired_by_seq(rows):
         seq = _to_float(r.get("seq"))
         l = _to_float(r.get("latency_ms"))
         if p in ("1", "2") and seq is not None and l is not None:
-            lat[int(p)].setdefault(int(seq), l)  # first copy per path
+            lat[int(p)].setdefault(int(seq), l)
     common = sorted(set(lat[1]) & set(lat[2]))
     return [(s, lat[1][s], lat[2][s]) for s in common]
 
@@ -398,8 +353,6 @@ def _style_stem(container, color, markersize=5):
 
 
 def plot_latency_stem(rows, out: Path, name: str, window: int):
-    """Per-packet latency as a stem plot for Wi-Fi and 5G/LTE side by side,
-    x = packet number — the left figure on the project poster."""
     paired = paired_by_seq(rows)[:window]
     if not paired:
         print(f"[skip latency-stem] {name}: no packets seen on both paths")
@@ -416,9 +369,8 @@ def plot_latency_stem(rows, out: Path, name: str, window: int):
             markerfacecolor="none", label="Stream 2 (5G/LTE)")
     ax.set_xlabel("Packet number [-]")
     ax.set_ylabel("Latency [ms]")
-    # Latency is dominated by a constant phone<->server clock offset, so zoom the
-    # y-axis to the data range; otherwise every stem looks the same height and
-    # the per-packet variation (the point of this plot) is invisible.
+
+
     lo, hi = min(l1 + l2), max(l1 + l2)
     pad = max((hi - lo) * 0.1, 1.0)
     ax.set_ylim(lo - pad, hi + pad)
@@ -431,9 +383,6 @@ def plot_latency_stem(rows, out: Path, name: str, window: int):
 
 
 def plot_diffdelay_stem(rows, out: Path, name: str, window: int):
-    """Differential delay |latency_WiFi - latency_5G| per packet as a stem plot
-    — the right figure on the project poster. Quantifies how far the two paths
-    are out of sync, the key skew metric for 1+1 protection."""
     paired = paired_by_seq(rows)[:window]
     if not paired:
         print(f"[skip diff-delay] {name}: no packets seen on both paths")

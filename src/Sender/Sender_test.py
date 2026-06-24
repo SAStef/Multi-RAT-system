@@ -1,3 +1,4 @@
+# simple sender, sends the same packet on both paths
 import socket as s
 import os
 import time
@@ -5,18 +6,19 @@ import struct
 import binascii
 
 ip           = "10.209.169.34"
-port1        = 6967          # First UDP channel
-port2        = 6968          # Second UDP channel
+port1        = 6967
+port2        = 6968
 pps          = 20.0
 payload_size = 32
-count        = 0
-SENT_TTL     = 64            # Initial TTL — embedded in header so receiver can calculate hops
-HDR_FMT      = "!IIQBBHx"   # seq(I) session(I) ts_ns(Q) path(B) sent_ttl(B) crc16(H) pad(x)
+count        = 0       # 0 = send forever
+SENT_TTL     = 64
+HDR_FMT      = "!IIQBBHx"
 HDR_SIZE     = struct.calcsize(HDR_FMT)
 
 sock1 = s.socket(s.AF_INET, s.SOCK_DGRAM)
 sock2 = s.socket(s.AF_INET, s.SOCK_DGRAM)
-sock1.setsockopt(s.IPPROTO_IP, s.IP_TTL, SENT_TTL)  # set TTL on the IP layer
+# set ttl so the receiver can figure out the hop count
+sock1.setsockopt(s.IPPROTO_IP, s.IP_TTL, SENT_TTL)
 sock2.setsockopt(s.IPPROTO_IP, s.IP_TTL, SENT_TTL)
 session_id = int.from_bytes(os.urandom(4), "big")
 
@@ -39,10 +41,9 @@ try:
         payload = os.urandom(payload_size)
         cs      = crc16(payload)
 
-        # Path 1
+        # same packet on both paths (path field differs)
         packet1 = struct.pack(HDR_FMT, seq, session_id, ts_ns, 1, SENT_TTL, cs) + payload
         sock1.sendto(packet1, (ip, port1))
-        # Path 2
         packet2 = struct.pack(HDR_FMT, seq, session_id, ts_ns, 2, SENT_TTL, cs) + payload
         sock2.sendto(packet2, (ip, port2))
 
