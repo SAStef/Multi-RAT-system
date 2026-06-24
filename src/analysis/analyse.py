@@ -8,9 +8,6 @@ and produces the report-ready figures and statistics:
   - summary.txt        mean +/- 95% confidence interval for latency/jitter per
                        stream, total loss percentages, packet counts, and the
                        path-failure correlation estimate
-  - latency_cdf.pdf    CDF of latency for path 1, path 2 and the merged stream
-  - latency_hist.pdf   histogram of the same three distributions
-  - timeseries.pdf     latency and loss over time (shows degraded-path events)
   - drift.pdf          merged latency with linear fit (clock-drift estimate),
                        only written for captures longer than 30 minutes
 
