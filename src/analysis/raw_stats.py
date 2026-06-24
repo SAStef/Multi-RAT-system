@@ -345,10 +345,14 @@ def paired_by_seq(rows):
     return [(s, lat[1][s], lat[2][s]) for s in common]
 
 
-def _style_stem(container, color, markersize=5):
+def _style_stem(container, color, markersize=6, fill=False):
     markerline, stemlines, baseline = container
-    plt.setp(markerline, color=color, markersize=markersize, markerfacecolor="none")
-    plt.setp(stemlines, color=color, linewidth=1.0)
+    plt.setp(markerline, color=color, markersize=markersize,
+             markerfacecolor=(color if fill else "none"),
+             markeredgecolor=("white" if fill else color),
+             markeredgewidth=(0.7 if fill else 1.0))
+    plt.setp(stemlines, color=color, linewidth=(0.9 if fill else 1.0),
+             alpha=(0.4 if fill else 1.0))
     plt.setp(baseline, visible=False)
 
 
@@ -361,13 +365,15 @@ def plot_latency_stem(rows, out: Path, name: str, window: int):
     l1 = [a for _, a, _ in paired]
     l2 = [b for _, _, b in paired]
     fig, ax = plt.subplots(figsize=(9, 4))
-    _style_stem(ax.stem(x - 0.15, l1, basefmt=" "), _style.STREAM_COLORS["Wi-Fi"])
-    _style_stem(ax.stem(x + 0.15, l2, basefmt=" "), _style.STREAM_COLORS["5G/LTE"])
+    _style_stem(ax.stem(x - 0.15, l1, basefmt=" "), _style.STREAM_COLORS["Wi-Fi"], fill=True)
+    _style_stem(ax.stem(x + 0.15, l2, basefmt=" "), _style.STREAM_COLORS["5G/LTE"], fill=True)
     ax.plot([], [], "o-", color=_style.STREAM_COLORS["Wi-Fi"],
-            markerfacecolor="none", label="Stream 1 (Wi-Fi)")
+            markerfacecolor=_style.STREAM_COLORS["Wi-Fi"], markeredgecolor="white",
+            label="Stream 1 (Wi-Fi)")
     ax.plot([], [], "o-", color=_style.STREAM_COLORS["5G/LTE"],
-            markerfacecolor="none", label="Stream 2 (5G/LTE)")
-    ax.set_xlabel("Packet number [-]")
+            markerfacecolor=_style.STREAM_COLORS["5G/LTE"], markeredgecolor="white",
+            label="Stream 2 (5G/LTE)")
+    ax.set_xlabel("Packet [-]")
     ax.set_ylabel("Latency [ms]")
 
 
@@ -390,10 +396,10 @@ def plot_diffdelay_stem(rows, out: Path, name: str, window: int):
     x = np.arange(1, len(paired) + 1)
     dd = [abs(a - b) for _, a, b in paired]
     fig, ax = plt.subplots(figsize=(9, 4))
-    _style_stem(ax.stem(x, dd, basefmt=" "), "#5E35B1")
-    ax.plot([], [], "o-", color="#5E35B1", markerfacecolor="none",
-            label="Wi-Fi vs 5G/LTE differential delay")
-    ax.set_xlabel("Packet number [-]")
+    _style_stem(ax.stem(x, dd, basefmt=" "), "#5E35B1", fill=True)
+    ax.plot([], [], "o-", color="#5E35B1", markerfacecolor="#5E35B1",
+            markeredgecolor="white", label="Wi-Fi vs 5G/LTE differential delay")
+    ax.set_xlabel("Packet [-]")
     ax.set_ylabel("Differential delay [ms]")
     ax.set_ylim(bottom=0)
     ax.set_title(f"Inter-path differential delay — {name}")
@@ -402,6 +408,311 @@ def plot_diffdelay_stem(rows, out: Path, name: str, window: int):
     fig.savefig(out / f"{name}_diffdelay_stem.pdf")
     plt.close(fig)
     print(f"  diff-delay -> {out / (name + '_diffdelay_stem.pdf')}")
+
+
+def _t0(rows):
+    times = [_to_float(r.get("time")) for r in rows]
+    times = [t for t in times if t is not None]
+    return min(times) if times else 0.0
+
+
+def write_perpacket(rows, out: Path, name: str):
+    # full per-packet log, time zeroed, with stream name + merged flag
+    t0 = _t0(rows)
+    path = out / f"{name}_perpacket.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "path", "stream", "session_id", "seq",
+                    "latency_ms", "hops", "crc_ok", "is_duplicate", "in_merged"])
+        for r in rows:
+            t = _to_float(r.get("time"))
+            ts = round(t - t0, 4) if t is not None else ""
+            p = r.get("path")
+            stream = "Wi-Fi" if p == "1" else ("5G/LTE" if p == "2" else "")
+            in_merged = 1 if (r.get("crc_ok") == "1" and r.get("is_duplicate") == "0") else 0
+            w.writerow([ts, p, stream, r.get("session_id"), r.get("seq"),
+                        r.get("latency_ms"), r.get("hops"), r.get("crc_ok"),
+                        r.get("is_duplicate"), in_merged])
+    print(f"  per-packet raw -> {path}")
+
+
+def write_latency_timeseries(rows, out: Path, name: str):
+    # latency per packet over time, merged counted as its own stream
+    t0 = _t0(rows)
+    path = out / f"{name}_latency_timeseries.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "stream", "session_id", "seq", "latency_ms"])
+        for r in rows:
+            if r.get("crc_ok") != "1":
+                continue
+            t = _to_float(r.get("time"))
+            l = _to_float(r.get("latency_ms"))
+            if t is None or l is None:
+                continue
+            ts = round(t - t0, 4)
+            sid = r.get("session_id")
+            seq = r.get("seq")
+            p = r.get("path")
+            if p == "1":
+                w.writerow([ts, "Wi-Fi", sid, seq, round(l, 4)])
+            elif p == "2":
+                w.writerow([ts, "5G/LTE", sid, seq, round(l, 4)])
+            if r.get("is_duplicate") == "0":
+                w.writerow([ts, "Merged", sid, seq, round(l, 4)])
+    print(f"  latency timeseries -> {path}")
+
+
+def write_latency_cdf(groups, out: Path, name: str):
+    # sorted latency + cdf value per stream
+    path = out / f"{name}_latency_cdf.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["stream", "latency_ms", "cdf"])
+        for g, _ in GROUPS:
+            x = np.sort(groups[g])
+            n = x.size
+            for i, v in enumerate(x, 1):
+                w.writerow([g, round(float(v), 4), round(i / n, 6)])
+    print(f"  latency CDF data -> {path}")
+
+
+def write_paired_latency(rows, out: Path, name: str):
+    # packets that arrived on both paths + their delay difference
+    path = out / f"{name}_paired_latency.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["seq", "wifi_ms", "lte_ms", "diff_delay_ms"])
+        for s, a, b in paired_by_seq(rows):
+            w.writerow([s, round(a, 4), round(b, 4), round(abs(a - b), 4)])
+    print(f"  paired latency -> {path}")
+
+
+def write_loss_timeseries(rows, out: Path, name: str, bin_s: float = 1.0):
+    # packet loss per second for each stream
+    t0 = _t0(rows)
+    streams = {g: {} for g, _ in GROUPS}
+
+    def add(stream, b, s):
+        streams[stream].setdefault(b, set()).add(s)
+
+    for r in rows:
+        t = _to_float(r.get("time"))
+        s = _to_float(r.get("seq"))
+        if t is None or s is None:
+            continue
+        b = int((t - t0) // bin_s)
+        s = int(s)
+        p = r.get("path")
+        if p == "1":
+            add("Wi-Fi", b, s)
+        elif p == "2":
+            add("5G/LTE", b, s)
+        if r.get("is_duplicate") == "0":
+            add("Merged", b, s)
+
+    def loss_pct(ss):
+        span = max(ss) - min(ss) + 1
+        return 100.0 * (span - len(ss)) / span if span > 0 else 0.0
+
+    allbins = sorted({b for st in streams.values() for b in st})
+    path = out / f"{name}_loss_timeseries.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "wifi_loss_pct", "lte_loss_pct", "merged_loss_pct"])
+        for b in allbins:
+            vals = []
+            for g, _ in GROUPS:
+                vals.append(round(loss_pct(streams[g][b]), 4) if b in streams[g] else "")
+            w.writerow([round(b * bin_s, 3), *vals])
+    print(f"  loss timeseries -> {path}")
+
+
+def write_jitter(rows, out: Path, name: str):
+    # jitter per packet. the latency diff cancels the constant clock offset.
+    # rfc3550_jitter_ms is the RFC 3550 running estimate
+    t0 = _t0(rows)
+    streams = {g: [] for g, _ in GROUPS}
+    for r in rows:
+        if r.get("crc_ok") != "1":
+            continue
+        l = _to_float(r.get("latency_ms"))
+        seq = _to_float(r.get("seq"))
+        t = _to_float(r.get("time"))
+        if l is None or seq is None:
+            continue
+        rec = (int(seq), t, l)
+        p = r.get("path")
+        if p == "1":
+            streams["Wi-Fi"].append(rec)
+        elif p == "2":
+            streams["5G/LTE"].append(rec)
+        if r.get("is_duplicate") == "0":
+            streams["Merged"].append(rec)
+    path = out / f"{name}_jitter.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["stream", "seq", "time_s", "latency_ms",
+                    "delta_latency_ms", "abs_delta_ms", "rfc3550_jitter_ms"])
+        for g, _ in GROUPS:
+            recs = sorted(streams[g], key=lambda x: x[0])
+            prev_l = None
+            J = 0.0
+            for seq, t, l in recs:
+                if prev_l is None:
+                    delta = 0.0
+                else:
+                    delta = l - prev_l
+                    J += (abs(delta) - J) / 16.0
+                ts = round(t - t0, 4) if t is not None else ""
+                w.writerow([g, seq, ts, round(l, 4), round(delta, 4),
+                            round(abs(delta), 4), round(J, 4)])
+                prev_l = l
+    print(f"  jitter -> {path}")
+
+
+def write_interarrival(rows, out: Path, name: str):
+    # ms between consecutive arrivals on each stream
+    t0 = _t0(rows)
+    streams = {g: [] for g, _ in GROUPS}
+    for r in rows:
+        t = _to_float(r.get("time"))
+        if t is None:
+            continue
+        seq = _to_float(r.get("seq"))
+        rec = (t, int(seq) if seq is not None else "")
+        p = r.get("path")
+        if p == "1":
+            streams["Wi-Fi"].append(rec)
+        elif p == "2":
+            streams["5G/LTE"].append(rec)
+        if r.get("is_duplicate") == "0":
+            streams["Merged"].append(rec)
+    path = out / f"{name}_interarrival.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["stream", "seq", "time_s", "interarrival_ms"])
+        for g, _ in GROUPS:
+            recs = sorted(streams[g], key=lambda x: x[0])
+            prev_t = None
+            for t, seq in recs:
+                ia = "" if prev_t is None else round((t - prev_t) * 1000.0, 4)
+                w.writerow([g, seq, round(t - t0, 4), ia])
+                prev_t = t
+    print(f"  inter-arrival -> {path}")
+
+
+def write_throughput(rows, out: Path, name: str, bin_s: float = 1.0):
+    # packets per second on each stream
+    t0 = _t0(rows)
+    streams = {g: Counter() for g, _ in GROUPS}
+    for r in rows:
+        t = _to_float(r.get("time"))
+        if t is None:
+            continue
+        b = int((t - t0) // bin_s)
+        p = r.get("path")
+        if p == "1":
+            streams["Wi-Fi"][b] += 1
+        elif p == "2":
+            streams["5G/LTE"][b] += 1
+        if r.get("is_duplicate") == "0":
+            streams["Merged"][b] += 1
+    allbins = sorted({b for c in streams.values() for b in c})
+    path = out / f"{name}_throughput.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "wifi_pps", "lte_pps", "merged_pps"])
+        for b in allbins:
+            w.writerow([round(b * bin_s, 3)] + [streams[g][b] for g, _ in GROUPS])
+    print(f"  throughput -> {path}")
+
+
+# latency vs time for all three streams on one plot
+def plot_latency_time(rows, out: Path, name: str):
+    t0 = _t0(rows)
+    series = {g: ([], []) for g, _ in GROUPS}
+    for r in rows:
+        if r.get("crc_ok") != "1":
+            continue
+        t = _to_float(r.get("time"))
+        l = _to_float(r.get("latency_ms"))
+        if t is None or l is None:
+            continue
+        ts = t - t0
+        p = r.get("path")
+        if p == "1":
+            series["Wi-Fi"][0].append(ts); series["Wi-Fi"][1].append(l)
+        elif p == "2":
+            series["5G/LTE"][0].append(ts); series["5G/LTE"][1].append(l)
+        if r.get("is_duplicate") == "0":
+            series["Merged"][0].append(ts); series["Merged"][1].append(l)
+    if not any(series[g][0] for g, _ in GROUPS):
+        print(f"[skip latency-time] {name}: no samples")
+        return
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for g, color in GROUPS:
+        t, l = series[g]
+        if t:
+            order = np.argsort(t)
+            ax.plot(np.asarray(t)[order], np.asarray(l)[order], color=color,
+                    linewidth=0.9, marker="o", markersize=2.5,
+                    markerfacecolor=color, markeredgecolor="none", label=g)
+    lim = robust_limits([np.asarray(series[g][1]) for g, _ in GROUPS], hi_pct=99.5)
+    if lim:
+        ax.set_ylim(*lim)
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Latency [ms]")
+    ax.set_title(f"Latency over time — {name}")
+    ax.legend(loc="upper right", ncol=3)
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_latency_time.pdf")
+    plt.close(fig)
+    print(f"  latency-time -> {out / (name + '_latency_time.pdf')}")
+
+
+# same stem plot but x axis is time instead of packet index
+def plot_latency_stem_time(rows, out: Path, name: str, window: int):
+    t0 = _t0(rows)
+    series = {"Wi-Fi": ([], []), "5G/LTE": ([], [])}
+    for r in rows:
+        if r.get("crc_ok") != "1":
+            continue
+        t = _to_float(r.get("time"))
+        l = _to_float(r.get("latency_ms"))
+        if t is None or l is None:
+            continue
+        p = r.get("path")
+        if p == "1" and len(series["Wi-Fi"][0]) < window:
+            series["Wi-Fi"][0].append(t - t0); series["Wi-Fi"][1].append(l)
+        elif p == "2" and len(series["5G/LTE"][0]) < window:
+            series["5G/LTE"][0].append(t - t0); series["5G/LTE"][1].append(l)
+    allv = series["Wi-Fi"][1] + series["5G/LTE"][1]
+    if not allv:
+        print(f"[skip latency-stem-time] {name}: no samples")
+        return
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for g in ("Wi-Fi", "5G/LTE"):
+        t, l = series[g]
+        if t:
+            _style_stem(ax.stem(t, l, basefmt=" "), _style.STREAM_COLORS[g], fill=True)
+    ax.plot([], [], "o-", color=_style.STREAM_COLORS["Wi-Fi"],
+            markerfacecolor=_style.STREAM_COLORS["Wi-Fi"], markeredgecolor="white",
+            label="Stream 1 (Wi-Fi)")
+    ax.plot([], [], "o-", color=_style.STREAM_COLORS["5G/LTE"],
+            markerfacecolor=_style.STREAM_COLORS["5G/LTE"], markeredgecolor="white",
+            label="Stream 2 (5G/LTE)")
+    lo, hi = min(allv), max(allv)
+    pad = max((hi - lo) * 0.1, 1.0)
+    ax.set_ylim(lo - pad, hi + pad)
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Latency [ms]")
+    ax.set_title(f"Per-packet latency over time — {name}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out / f"{name}_latency_stem_time.pdf")
+    plt.close(fig)
+    print(f"  latency-stem-time -> {out / (name + '_latency_stem_time.pdf')}")
 
 
 def analyse_file(csv_path: Path, out: Path, window: int = 40):
@@ -414,11 +725,21 @@ def analyse_file(csv_path: Path, out: Path, window: int = 40):
     counts = path_counts(rows)
     write_stats(groups, counts, out, name)
     write_latex(groups, counts, out, name)
+    write_perpacket(rows, out, name)
+    write_latency_timeseries(rows, out, name)
+    write_latency_cdf(groups, out, name)
+    write_paired_latency(rows, out, name)
+    write_loss_timeseries(rows, out, name)
+    write_jitter(rows, out, name)
+    write_interarrival(rows, out, name)
+    write_throughput(rows, out, name)
     plot_timeline(rows, out, name)
     plot_boxplot(groups, out, name)
     plot_cdf(groups, out, name)
     plot_hist(groups, out, name)
     plot_latency_stem(rows, out, name, window)
+    plot_latency_stem_time(rows, out, name, window)
+    plot_latency_time(rows, out, name)
     plot_diffdelay_stem(rows, out, name, window)
 
 
